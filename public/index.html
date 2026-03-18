@@ -1,0 +1,1576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Converter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  * { scrollbar-width: none; }
+  *::-webkit-scrollbar { display: none; }
+
+  :root {
+    --bg:      #0f0f0f;
+    --surface: #0a0a0a;
+    --blue:    #1400FF;
+    --white:   #f2f2f2;
+    --grey:    #adadad;
+    --border:  #565656;
+
+    --t-label:   12px;
+    --t-sm:      12px;
+    --t-base:    13px;
+    --t-md:      15px;
+    --t-display: 32px;
+
+    --ls-body:  0px;
+    --ls-label: 2px;
+    --ls-hero:  4px;
+
+    --sp-1:  4px;
+    --sp-2:  8px;
+    --sp-3:  12px;
+    --sp-4:  16px;
+    --sp-5:  20px;
+    --sp-6:  24px;
+    --sp-12: 48px;
+
+    --font: 'IBM Plex Mono', 'Courier New', monospace;
+    --titlebar-h: 40px;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--white);
+    font-family: var(--font);
+    font-size: var(--t-base);
+    line-height: 1.5;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 0;
+  }
+  #fileInput { display: none; }
+
+  /* ════════════════════════════════
+     TITLEBAR
+     ════════════════════════════════ */
+  .titlebar {
+    display: flex;
+    align-items: center;
+    height: var(--titlebar-h);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    -webkit-app-region: drag;
+    flex-shrink: 0;
+    padding: 0 var(--sp-4);
+    gap: 0;
+    user-select: none;
+  }
+  /* Space for macOS traffic lights */
+  .titlebar-spacer {
+    width: 70px;
+    flex-shrink: 0;
+  }
+
+  .titlebar-center {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: 0 auto;
+    -webkit-app-region: no-drag;
+  }
+
+  /* Custom dropdown trigger */
+  .fmt-picker {
+    position: relative;
+    -webkit-app-region: no-drag;
+  }
+  .fmt-trigger {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--white);
+    font-family: var(--font);
+    font-size: var(--t-sm);
+    font-weight: 700;
+    letter-spacing: var(--ls-label);
+    text-transform: uppercase;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    white-space: nowrap;
+  }
+  .fmt-trigger:hover { border-color: var(--white); }
+  .fmt-trigger.open { border-color: var(--blue); background: var(--blue); }
+  .fmt-trigger .arrow {
+    font-size: 8px;
+    opacity: 0.6;
+    transition: transform 0.15s;
+  }
+  .fmt-trigger.open .arrow { transform: rotate(180deg); }
+  .fmt-label {
+    font-weight: 400;
+    color: var(--grey);
+    font-size: 10px;
+    letter-spacing: var(--ls-label);
+    margin-right: 2px;
+  }
+
+  .fmt-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #111;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px;
+    z-index: 1000;
+    min-width: 120px;
+  }
+  .fmt-dropdown.open { display: block; }
+  .fmt-option {
+    display: block;
+    width: 100%;
+    padding: 6px 12px;
+    background: none;
+    border: none;
+    color: var(--grey);
+    font-family: var(--font);
+    font-size: var(--t-sm);
+    font-weight: 700;
+    letter-spacing: var(--ls-label);
+    text-transform: uppercase;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 4px;
+    transition: background 0.1s, color 0.1s;
+  }
+  .fmt-option:hover { background: #1a1a1a; color: var(--white); }
+  .fmt-option.active { color: var(--white); background: var(--blue); }
+
+  .titlebar-arrow {
+    color: var(--grey);
+    font-size: var(--t-md);
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+
+  .titlebar-ver {
+    position: absolute;
+    right: var(--sp-4);
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--grey);
+    letter-spacing: var(--ls-label);
+    text-transform: uppercase;
+    -webkit-app-region: no-drag;
+  }
+
+  /* ════════════════════════════════
+     VIEWS
+     ════════════════════════════════ */
+  .view { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+  .view.active { display: flex; }
+
+  /* ════════════════════════════════
+     STATE 1 — INPUT
+     ════════════════════════════════ */
+  .input-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: var(--sp-5);
+    min-height: 0;
+  }
+  .input-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* DROP ZONE */
+  .dropzone {
+    border: 1px solid var(--border);
+    padding: var(--sp-4);
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.1s, background 0.1s;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+  .dropzone:hover,
+  .dropzone.drag-over { border-color: var(--blue); background: #0a0aff11; }
+  .dropzone.has-file { border-color: var(--blue); }
+  .dropzone.has-file .drop-main { background: var(--blue); color: var(--white); display: inline-block; padding: 1px var(--sp-2); letter-spacing: var(--ls-hero); }
+  .dropzone.has-file .drop-sub { letter-spacing: var(--ls-body); font-style: normal; }
+
+  .drop-main {
+    font-size: var(--t-md);
+    font-weight: 700;
+    letter-spacing: var(--ls-hero);
+    text-transform: uppercase;
+  }
+  .drop-sub {
+    font-size: var(--t-sm);
+    color: var(--grey);
+    margin-top: var(--sp-2);
+    letter-spacing: var(--ls-body);
+  }
+  .drop-sub em {
+    color: var(--white);
+    font-style: normal;
+    text-decoration: underline;
+    text-decoration-color: var(--blue);
+    text-underline-offset: 3px;
+  }
+
+  /* FILE INFO BAR */
+  .file-info {
+    display: none;
+    border: 1px solid var(--border);
+    border-top: none;
+    padding: var(--sp-3) var(--sp-4);
+    align-items: center;
+    gap: var(--sp-3);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .file-info.visible { display: flex; }
+  .filename { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--t-sm); }
+  .filesize  { background: var(--blue); color: var(--white); white-space: nowrap; letter-spacing: var(--ls-label); padding: 1px var(--sp-1); font-size: var(--t-sm); font-weight: 700; }
+
+  .btn-clear {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--grey);
+    font-family: var(--font);
+    font-size: var(--t-label);
+    font-weight: 700;
+    padding: var(--sp-1) var(--sp-2);
+    cursor: pointer;
+    letter-spacing: var(--ls-label);
+    text-transform: uppercase;
+    transition: color 0.1s, border-color 0.1s;
+  }
+  .btn-clear:hover { color: var(--white); border-color: var(--white); }
+
+  /* CONTROLS */
+  .ctrl-row {
+    display: flex;
+    border: 1px solid var(--border);
+    border-top: none;
+    flex-shrink: 0;
+  }
+  .ctrl-cell {
+    flex: 1;
+    padding: var(--sp-4);
+    border-right: 1px solid var(--border);
+  }
+  .ctrl-cell:last-child { border-right: none; }
+  .ctrl-cell.full { flex: none; width: 100%; border-right: none; }
+
+  .ctrl-key {
+    font-size: var(--t-label);
+    font-weight: 700;
+    color: var(--grey);
+    letter-spacing: var(--ls-label);
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: var(--sp-3);
+  }
+  .ctrl-key .v {
+    color: var(--white);
+    font-weight: 400;
+    letter-spacing: var(--ls-body);
+    font-size: var(--t-base);
+  }
+  .ctrl-key .v[contenteditable] {
+    cursor: text;
+    outline: none;
+    caret-color: var(--blue);
+    text-decoration: underline;
+    text-decoration-color: var(--border);
+    text-underline-offset: 3px;
+  }
+  .ctrl-key .v[contenteditable]:focus {
+    text-decoration-color: var(--blue);
+  }
+
+  input[type=range] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 1px;
+    background: var(--border);
+    outline: none;
+    cursor: pointer;
+    position: relative;
+    z-index: 2;
+  }
+  .range-wrap { position: relative; }
+  .range-ticks {
+    position: absolute;
+    left: 4px; right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 9px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .range-ticks span {
+    position: absolute;
+    width: 1px;
+    height: 100%;
+    background: var(--border);
+    transform: translateX(-50%);
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: var(--sp-2);
+    height: var(--sp-5);
+    background: var(--blue);
+    border: none;
+    cursor: pointer;
+    position: relative;
+    z-index: 3;
+  }
+  input[type=range]:hover::-webkit-slider-thumb { background: var(--white); }
+
+  /* SLIDER + ORIG TOGGLE */
+  .slider-with-orig {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+  }
+  .slider-main { flex: 1; min-width: 0; }
+  .orig-toggle {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--grey);
+    font-family: var(--font);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: var(--ls-label);
+    padding: 3px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    text-transform: uppercase;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    margin-top: -2px;
+  }
+  .orig-toggle:hover { border-color: var(--white); color: var(--white); }
+  .orig-toggle.active {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: var(--white);
+  }
+  .slider-with-orig.orig-active .slider-main {
+    opacity: 0.25;
+    pointer-events: none;
+  }
+
+  .range-marks {
+    position: relative;
+    height: 1.2em;
+    font-size: var(--t-label);
+    color: var(--grey);
+    margin-top: var(--sp-2);
+    margin-left: 4px;
+    margin-right: 4px;
+    letter-spacing: var(--ls-body);
+  }
+  .range-marks span {
+    position: absolute;
+    transform: translateX(-50%);
+  }
+  .range-marks span:first-child { left: 0; transform: none; }
+  .range-marks span:last-child { left: 100%; transform: translateX(-100%); }
+
+  select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--white);
+    font-family: var(--font);
+    font-size: var(--t-base);
+    padding: var(--sp-2) var(--sp-2);
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    letter-spacing: var(--ls-body);
+  }
+  select:hover, select:focus { border-color: var(--blue); }
+  select option { background: #111; }
+
+  /* ESTIMATE BAR */
+  .estimate-bar {
+    display: none;
+    border: 1px solid var(--border);
+    border-top: none;
+    padding: var(--sp-3) var(--sp-4);
+    align-items: baseline;
+    gap: var(--sp-3);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .estimate-bar.visible { display: flex; }
+  .estimate-label { color: var(--grey); letter-spacing: var(--ls-label); font-size: var(--t-label); text-transform: uppercase; font-weight: 700; }
+  .estimate-value { background: var(--blue); color: var(--white); font-size: var(--t-base); font-weight: 700; padding: 1px var(--sp-1); }
+  .estimate-note  { margin-left: auto; font-size: var(--t-label); color: var(--grey); letter-spacing: var(--ls-body); }
+
+  /* PRIMARY BUTTON */
+  .btn-convert {
+    display: block;
+    width: 100%;
+    margin-top: auto;
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--blue);
+    color: var(--white);
+    border: none;
+    font-family: var(--font);
+    font-size: var(--t-base);
+    font-weight: 700;
+    letter-spacing: var(--ls-hero);
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.1s;
+    flex-shrink: 0;
+  }
+  .btn-convert:hover:not(:disabled) { background: #3322ff; }
+  .btn-convert:disabled { background: var(--surface); color: var(--grey); cursor: not-allowed; border: 1px solid var(--border); border-top: none; }
+
+  /* Controls panel — hidden when not active format */
+  .controls-panel { display: none; }
+  .controls-panel.active { display: contents; }
+
+  @media (max-width: 580px) {
+    .ctrl-row { flex-direction: column; }
+    .ctrl-cell { border-right: none; border-bottom: 1px solid var(--border); }
+    .ctrl-cell:last-child { border-bottom: none; }
+  }
+
+  /* ════════════════════════════════
+     STATE 2 — OUTPUT
+     ════════════════════════════════ */
+  .output-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: var(--sp-5);
+    gap: var(--sp-5);
+    min-height: 0;
+    overflow-y: auto;
+    justify-content: center;
+  }
+  .output-body.has-result { justify-content: flex-start; }
+
+  .progress-section {
+    border: 1px solid var(--border);
+    padding: var(--sp-4);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .pass-indicators {
+    display: flex;
+    gap: var(--sp-1);
+    margin-bottom: var(--sp-4);
+  }
+  .pass-pill {
+    font-size: var(--t-label);
+    font-weight: 700;
+    letter-spacing: var(--ls-label);
+    text-transform: uppercase;
+    padding: var(--sp-1) var(--sp-2);
+    border: 1px solid var(--border);
+    color: var(--grey);
+  }
+  .pass-pill.active { border-color: var(--blue); color: var(--white); background: var(--blue); }
+  .pass-pill.done   { border-color: var(--border); color: var(--grey); background: #111; }
+
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: var(--sp-2);
+  }
+  .progress-status { font-size: var(--t-label); font-weight: 700; color: var(--grey); letter-spacing: var(--ls-label); text-transform: uppercase; }
+  .progress-pct    { font-size: var(--t-display); font-weight: 700; color: var(--white); letter-spacing: var(--ls-body); }
+
+  .progress-bar-track {
+    height: var(--sp-3);
+    background: #111;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    margin-bottom: var(--sp-2);
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--blue);
+    width: 0%;
+    transition: width 0.3s;
+  }
+  .progress-msg { font-size: var(--t-sm); color: var(--grey); min-height: var(--sp-4); letter-spacing: var(--ls-body); }
+
+  .result-section {
+    display: none;
+    border: 1px solid var(--border);
+    flex: 1;
+    min-height: 0;
+  }
+  .result-section.visible { display: grid; grid-template-columns: 1fr 280px; grid-template-rows: 1fr; }
+
+  .result-preview {
+    border-right: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #050505;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .result-preview img,
+  .result-preview video {
+    max-width: 100%;
+    max-height: 100%;
+    display: block;
+    object-fit: contain;
+  }
+
+  .result-meta {
+    display: flex;
+    flex-direction: column;
+    padding: var(--sp-4);
+    background: var(--surface);
+    overflow: hidden;
+    min-height: 0;
+  }
+  .meta-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+  }
+
+  .meta-label { font-size: var(--t-label); font-weight: 700; color: var(--grey); letter-spacing: var(--ls-label); text-transform: uppercase; margin-bottom: var(--sp-1); }
+  .meta-value { font-size: var(--t-md); font-weight: 700; color: var(--white); letter-spacing: var(--ls-body); }
+  .meta-value.ok { background: var(--blue); color: var(--white); padding: 1px var(--sp-1); display: inline-block; }
+
+  .size-bar { display: flex; flex-direction: column; gap: var(--sp-1); }
+  .size-bar-row { display: flex; align-items: center; gap: var(--sp-1); font-size: var(--t-label); color: var(--grey); }
+  .size-bar-label { width: 40px; font-weight: 700; letter-spacing: var(--ls-label); text-transform: uppercase; }
+  .size-bar-track { flex: 1; height: 2px; background: #222; overflow: hidden; }
+  .size-bar-fill  { height: 100%; }
+  .size-bar-fill.input-bar { background: var(--grey); }
+  .size-bar-fill.output-bar { background: var(--blue); }
+  .size-bar-num { width: 52px; text-align: right; color: var(--white); font-size: var(--t-label); }
+
+  .panel-actions { margin-top: auto; display: flex; flex-direction: column; gap: var(--sp-2); }
+
+  .btn-download,
+  .btn-again {
+    display: block;
+    width: 100%;
+    padding: var(--sp-2) var(--sp-4);
+    font-family: var(--font);
+    font-size: var(--t-label);
+    font-weight: 700;
+    letter-spacing: var(--ls-label);
+    text-transform: uppercase;
+    cursor: pointer;
+    text-align: center;
+    text-decoration: none;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+  }
+  .btn-download {
+    background: var(--blue);
+    color: var(--white);
+    border: none;
+    display: none;
+  }
+  .btn-download.visible { display: block; }
+  .btn-download:hover { background: #3322ff; }
+
+  .btn-again {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--grey);
+  }
+  .btn-again:hover { color: var(--white); border-color: var(--white); }
+
+  .error-box {
+    display: none;
+    border: 1px solid var(--white);
+    background: var(--blue);
+    padding: var(--sp-2) var(--sp-4);
+    font-size: var(--t-sm);
+    font-weight: 700;
+    color: var(--white);
+    letter-spacing: var(--ls-body);
+  }
+  .error-box.visible { display: block; }
+
+  @media (max-width: 640px) {
+    .result-section.visible { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    .result-preview { border-right: none; border-bottom: 1px solid var(--border); max-height: 50vh; }
+    .titlebar-ver { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════ TITLEBAR ═══════ -->
+<div class="titlebar">
+  <div class="titlebar-spacer"></div>
+
+  <div class="titlebar-center">
+    <!-- FROM picker -->
+    <div class="fmt-picker" id="fromPicker">
+      <button class="fmt-trigger" id="fromTrigger">
+        <span class="fmt-label">FROM</span>
+        <span id="fromValue">MP4</span>
+        <span class="arrow">▼</span>
+      </button>
+      <div class="fmt-dropdown" id="fromDropdown">
+        <button class="fmt-option active" data-value="mp4">MP4</button>
+        <button class="fmt-option" data-value="mov">MOV</button>
+        <button class="fmt-option" data-value="avi">AVI</button>
+        <button class="fmt-option" data-value="mkv">MKV</button>
+        <button class="fmt-option" data-value="webm">WEBM</button>
+        <button class="fmt-option" data-value="flv">FLV</button>
+        <button class="fmt-option" data-value="wmv">WMV</button>
+        <button class="fmt-option" data-value="gif">GIF</button>
+      </div>
+    </div>
+
+    <span class="titlebar-arrow">→</span>
+
+    <!-- TO picker -->
+    <div class="fmt-picker" id="toPicker">
+      <button class="fmt-trigger" id="toTrigger">
+        <span class="fmt-label">TO</span>
+        <span id="toValue">GIF</span>
+        <span class="arrow">▼</span>
+      </button>
+      <div class="fmt-dropdown" id="toDropdown">
+        <button class="fmt-option active" data-value="gif">GIF</button>
+        <button class="fmt-option" data-value="mp4">MP4</button>
+        <button class="fmt-option" data-value="webm">WEBM</button>
+        <button class="fmt-option" data-value="mov">MOV</button>
+        <button class="fmt-option" data-value="avi">AVI</button>
+        <button class="fmt-option" data-value="mkv">MKV</button>
+      </div>
+    </div>
+  </div>
+
+  <span class="titlebar-ver">V2.0</span>
+</div>
+
+<!-- ═══════ STATE 1: INPUT ═══════ -->
+<div class="view active" id="viewInput">
+  <div class="input-body">
+    <div class="input-scroll">
+
+      <!-- DROP ZONE -->
+      <div class="dropzone" id="dropzone">
+        <div class="drop-main" id="dropMain">DROP FILE HERE</div>
+        <div class="drop-sub" id="dropSub">or <em>click to browse</em> — max 500 MB</div>
+        <input type="file" id="fileInput" accept="video/*,image/gif,.mp4,.mov,.avi,.mkv,.webm,.flv,.wmv,.gif,.m4v,.ts,.mts,.3gp,.ogv">
+      </div>
+
+      <!-- FILE INFO -->
+      <div class="file-info" id="fileInfo">
+        <span class="filename" id="fileName">—</span>
+        <span class="filesize" id="fileSize">—</span>
+        <button class="btn-clear" id="clearBtn">[X]</button>
+      </div>
+
+      <!-- GIF CONTROLS -->
+      <div class="controls-panel active" id="ctrlGif">
+        <div class="ctrl-row">
+          <div class="ctrl-cell">
+            <div class="ctrl-key">FPS <span class="v" id="fpsVal" contenteditable="true" spellcheck="false">12</span></div>
+            <div class="slider-with-orig" id="fpsSliderWrap">
+              <div class="slider-main">
+                <div class="range-wrap">
+                  <div class="range-ticks"><span style="left:0%"></span><span style="left:18.6%"></span><span style="left:39%"></span><span style="left:49.2%"></span><span style="left:100%"></span></div>
+                  <input type="range" id="fps" min="1" max="60" value="12">
+                </div>
+                <div class="range-marks"><span>1</span><span style="left:18.6%">12</span><span style="left:39%">24</span><span style="left:49.2%">30</span><span>60</span></div>
+              </div>
+              <button class="orig-toggle" id="fpsOrigBtn">ORIG</button>
+            </div>
+          </div>
+          <div class="ctrl-cell">
+            <div class="ctrl-key">WIDTH <span class="v" id="widthVal" contenteditable="true" spellcheck="false">640px</span></div>
+            <div class="slider-with-orig" id="widthSliderWrap">
+              <div class="slider-main">
+                <div class="range-wrap">
+                  <div class="range-ticks"><span style="left:0%"></span><span style="left:22.2%"></span><span style="left:44.4%"></span><span style="left:66.7%"></span><span style="left:77.8%"></span><span style="left:88.9%"></span><span style="left:100%"></span></div>
+                  <input type="range" id="width" min="0" max="90" value="40">
+                </div>
+                <div class="range-marks"><span>240</span><span style="left:44.4%">640</span><span style="left:72%">1280</span><span>1920</span></div>
+              </div>
+              <button class="orig-toggle" id="widthOrigBtn">ORIG</button>
+            </div>
+          </div>
+        </div>
+        <div class="ctrl-row">
+          <div class="ctrl-cell full">
+            <div class="ctrl-key" style="margin-bottom:8px">DITHER</div>
+            <select id="dither">
+              <option value="sierra2_4a">sierra2_4a — best quality</option>
+              <option value="floyd_steinberg">floyd_steinberg — classic diffusion</option>
+              <option value="bayer">bayer — ordered, low noise</option>
+              <option value="none">none — smallest file</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIDEO CONTROLS -->
+      <div class="controls-panel" id="ctrlVideo">
+        <div class="ctrl-row">
+          <div class="ctrl-cell">
+            <div class="ctrl-key">RESOLUTION <span class="v" id="vidWidthVal" contenteditable="true" spellcheck="false">orig</span></div>
+            <div class="slider-with-orig" id="vidWidthSliderWrap">
+              <div class="slider-main">
+                <div class="range-wrap">
+                  <div class="range-ticks"><span style="left:0%"></span><span style="left:22.2%"></span><span style="left:44.4%"></span><span style="left:66.7%"></span><span style="left:77.8%"></span><span style="left:88.9%"></span><span style="left:100%"></span></div>
+                  <input type="range" id="vidWidth" min="0" max="90" value="90">
+                </div>
+                <div class="range-marks"><span>240</span><span style="left:44.4%">640</span><span style="left:72%">1280</span><span>1920</span></div>
+              </div>
+              <button class="orig-toggle active" id="vidWidthOrigBtn">ORIG</button>
+            </div>
+          </div>
+          <div class="ctrl-cell">
+            <div class="ctrl-key">QUALITY (CRF) <span class="v" id="crfVal">23</span></div>
+            <div class="range-wrap">
+              <div class="range-ticks"><span style="left:0%"></span><span style="left:35.3%"></span><span style="left:45.1%"></span><span style="left:62.7%"></span><span style="left:100%"></span></div>
+              <input type="range" id="crf" min="0" max="51" value="23">
+            </div>
+            <div class="range-marks"><span>0 (best)</span><span style="left:35.3%">18</span><span style="left:45.1%">23</span><span style="left:62.7%">32</span><span>51 (worst)</span></div>
+          </div>
+        </div>
+        <div class="ctrl-row" id="codecRow">
+          <div class="ctrl-cell full">
+            <div class="ctrl-key" style="margin-bottom:8px">CODEC</div>
+            <select id="codec">
+              <option value="h264">H.264 — widest compatibility</option>
+              <option value="h265">H.265 — smaller file, newer devices</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- ESTIMATE -->
+      <div class="estimate-bar" id="estimateBar">
+        <span class="estimate-label">EST.SIZE</span>
+        <span class="estimate-value" id="estimateVal">—</span>
+        <span class="estimate-note">approx · varies by content</span>
+      </div>
+
+    </div>
+
+    <button class="btn-convert" id="convertBtn" disabled>EXECUTE</button>
+
+  </div>
+</div>
+
+<!-- ═══════ STATE 2: OUTPUT ═══════ -->
+<div class="view" id="viewOutput">
+  <div class="output-body">
+
+    <div class="progress-section" id="progressSection">
+      <div class="pass-indicators" id="passIndicators">
+        <div class="pass-pill" id="pill1">PASS1:PALETTE</div>
+        <div class="pass-pill" id="pill2">PASS2:RENDER</div>
+      </div>
+      <div class="progress-header">
+        <div class="progress-status" id="progressStatus">UPLOADING</div>
+        <div class="progress-pct" id="progressPct">0%</div>
+      </div>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-msg" id="progressMsg">initialising...</div>
+    </div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="result-section" id="resultSection">
+      <div class="result-preview" id="resultPreview">
+        <img id="resultImg" src="" alt="Output">
+        <video id="resultVideo" src="" controls style="display:none"></video>
+      </div>
+      <div class="result-meta">
+        <div class="meta-scroll">
+          <div>
+            <div class="meta-label">STATUS</div>
+            <div class="meta-value ok">OK</div>
+          </div>
+          <div>
+            <div class="meta-label">SIZE</div>
+            <div class="size-bar">
+              <div class="size-bar-row">
+                <span class="size-bar-label" id="inputFmtLabel">IN</span>
+                <div class="size-bar-track"><div class="size-bar-fill input-bar" id="inputBar" style="width:100%"></div></div>
+                <span class="size-bar-num" id="inputSizeEl">—</span>
+              </div>
+              <div class="size-bar-row">
+                <span class="size-bar-label" id="outputFmtLabel">OUT</span>
+                <div class="size-bar-track"><div class="size-bar-fill output-bar" id="outputBarEl" style="width:0%"></div></div>
+                <span class="size-bar-num" id="outputSizeEl">—</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="meta-label">DIFFERENCE</div>
+            <div class="meta-value ok" id="reductionVal">—</div>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <a class="btn-download visible" id="downloadBtn" href="#">↓ SAVE FILE</a>
+          <button class="btn-again" id="againBtn">[ NEW FILE ]</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── FORMAT STATE ──
+let inputFormat = 'mp4';
+let outputFormat = 'gif';
+
+// ── WIDTH MAP ──
+const widthMap = [240, 320, 480, 560, 640, 720, 960, 1280, 1440, 1920];
+
+// ── STATE ──
+let selectedFile = null;
+let videoMeta = null;
+let converting = false;
+let currentJobId = null;
+let currentSSE = null;
+let customFps = null;
+let customWidth = null;
+
+// ── ELEMENTS ──
+const viewInput   = document.getElementById('viewInput');
+const viewOutput  = document.getElementById('viewOutput');
+const dropzone    = document.getElementById('dropzone');
+const fileInput   = document.getElementById('fileInput');
+const fileInfo    = document.getElementById('fileInfo');
+const fileName    = document.getElementById('fileName');
+const fileSize    = document.getElementById('fileSize');
+const clearBtn    = document.getElementById('clearBtn');
+const dropMain    = document.getElementById('dropMain');
+const dropSub     = document.getElementById('dropSub');
+const convertBtn  = document.getElementById('convertBtn');
+const outputBody  = document.querySelector('.output-body');
+const progSection = document.getElementById('progressSection');
+const passIndicators = document.getElementById('passIndicators');
+const pill1       = document.getElementById('pill1');
+const pill2       = document.getElementById('pill2');
+const progStatus  = document.getElementById('progressStatus');
+const progPct     = document.getElementById('progressPct');
+const progFill    = document.getElementById('progressFill');
+const progMsg     = document.getElementById('progressMsg');
+const errorBox    = document.getElementById('errorBox');
+const resultSection = document.getElementById('resultSection');
+const resultImg   = document.getElementById('resultImg');
+const resultVideo = document.getElementById('resultVideo');
+const inputSizeEl = document.getElementById('inputSizeEl');
+const outputSizeEl = document.getElementById('outputSizeEl');
+const inputBar    = document.getElementById('inputBar');
+const outputBarEl = document.getElementById('outputBarEl');
+const inputFmtLabel = document.getElementById('inputFmtLabel');
+const outputFmtLabel = document.getElementById('outputFmtLabel');
+const reductionVal= document.getElementById('reductionVal');
+const downloadBtn = document.getElementById('downloadBtn');
+const againBtn    = document.getElementById('againBtn');
+const estimateBar = document.getElementById('estimateBar');
+const estimateVal = document.getElementById('estimateVal');
+
+// GIF controls
+const fpsSlider   = document.getElementById('fps');
+const fpsVal      = document.getElementById('fpsVal');
+const widthSlider = document.getElementById('width');
+const widthVal    = document.getElementById('widthVal');
+const ditherSel   = document.getElementById('dither');
+const ctrlGif     = document.getElementById('ctrlGif');
+
+// Video controls
+const vidWidthSlider = document.getElementById('vidWidth');
+const vidWidthVal = document.getElementById('vidWidthVal');
+const crfSlider   = document.getElementById('crf');
+const crfVal      = document.getElementById('crfVal');
+const codecSel    = document.getElementById('codec');
+const codecRow    = document.getElementById('codecRow');
+const ctrlVideo   = document.getElementById('ctrlVideo');
+
+// Format pickers
+const fromTrigger = document.getElementById('fromTrigger');
+const fromDropdown = document.getElementById('fromDropdown');
+const fromValue   = document.getElementById('fromValue');
+const toTrigger   = document.getElementById('toTrigger');
+const toDropdown  = document.getElementById('toDropdown');
+const toValue     = document.getElementById('toValue');
+
+function fmtBytes(b) {
+  if (b < 1024) return `${b}B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)}KB`;
+  return `${(b / 1024 / 1024).toFixed(2)}MB`;
+}
+
+// ── FORMAT PICKER LOGIC ──
+function setupPicker(trigger, dropdown, onSelect) {
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    // Close other dropdowns
+    document.querySelectorAll('.fmt-dropdown.open').forEach(d => {
+      if (d !== dropdown) { d.classList.remove('open'); d.previousElementSibling?.classList.remove('open'); }
+    });
+    const isOpen = dropdown.classList.toggle('open');
+    trigger.classList.toggle('open', isOpen);
+  });
+
+  dropdown.querySelectorAll('.fmt-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const val = opt.dataset.value;
+      dropdown.querySelectorAll('.fmt-option').forEach(o => o.classList.remove('active'));
+      opt.classList.add('active');
+      onSelect(val);
+      dropdown.classList.remove('open');
+      trigger.classList.remove('open');
+    });
+  });
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.fmt-dropdown.open').forEach(d => d.classList.remove('open'));
+  document.querySelectorAll('.fmt-trigger.open').forEach(t => t.classList.remove('open'));
+});
+
+setupPicker(fromTrigger, fromDropdown, (val) => {
+  inputFormat = val;
+  fromValue.textContent = val.toUpperCase();
+  updateAccept();
+  updateDropzoneText();
+  if (selectedFile) clearFile();
+});
+
+setupPicker(toTrigger, toDropdown, (val) => {
+  outputFormat = val;
+  toValue.textContent = val.toUpperCase();
+  updateControls();
+  updateEstimate();
+});
+
+function updateAccept() {
+  const map = {
+    mp4: '.mp4,video/mp4',
+    mov: '.mov,video/quicktime',
+    avi: '.avi,video/x-msvideo',
+    mkv: '.mkv,video/x-matroska',
+    webm: '.webm,video/webm',
+    flv: '.flv,video/x-flv',
+    wmv: '.wmv,video/x-ms-wmv',
+    gif: '.gif,image/gif',
+  };
+  fileInput.accept = map[inputFormat] || 'video/*';
+}
+
+function updateDropzoneText() {
+  if (!selectedFile) {
+    dropMain.textContent = `DROP ${inputFormat.toUpperCase()} HERE`;
+  }
+}
+
+function updateControls() {
+  const isGif = outputFormat === 'gif';
+  ctrlGif.classList.toggle('active', isGif);
+  ctrlVideo.classList.toggle('active', !isGif);
+
+  // Show codec row only for formats that support h265
+  if (!isGif) {
+    const supportsH265 = ['mp4', 'mkv'].includes(outputFormat);
+    codecRow.style.display = supportsH265 ? '' : 'none';
+
+    // WebM uses VP9, hide codec selector and show info
+    if (outputFormat === 'webm') {
+      codecRow.style.display = 'none';
+    }
+  }
+}
+
+// ── VIEW SWITCHING ──
+function showView(name) {
+  viewInput.classList.toggle('active', name === 'input');
+  viewOutput.classList.toggle('active', name === 'output');
+}
+
+// ── ORIG TOGGLE SETUP ──
+const fpsOrigBtn = document.getElementById('fpsOrigBtn');
+const fpsSliderWrap = document.getElementById('fpsSliderWrap');
+const widthOrigBtn = document.getElementById('widthOrigBtn');
+const widthSliderWrap = document.getElementById('widthSliderWrap');
+const vidWidthOrigBtn = document.getElementById('vidWidthOrigBtn');
+const vidWidthSliderWrap = document.getElementById('vidWidthSliderWrap');
+
+let fpsOrig = false;
+let widthOrig = false;
+let vidWidthOrig = true; // default to orig for video resolution
+
+function setupOrigToggle(btn, wrap, { onActivate, onDeactivate, getState, setState }) {
+  btn.addEventListener('click', () => {
+    const newState = !getState();
+    setState(newState);
+    btn.classList.toggle('active', newState);
+    wrap.classList.toggle('orig-active', newState);
+    if (newState) onActivate(); else onDeactivate();
+    updateEstimate();
+  });
+  // Init visual state
+  btn.classList.toggle('active', getState());
+  wrap.classList.toggle('orig-active', getState());
+}
+
+setupOrigToggle(fpsOrigBtn, fpsSliderWrap, {
+  getState: () => fpsOrig,
+  setState: (v) => { fpsOrig = v; customFps = null; },
+  onActivate: () => { fpsVal.textContent = 'orig'; },
+  onDeactivate: () => { fpsVal.textContent = fpsSlider.value; },
+});
+
+setupOrigToggle(widthOrigBtn, widthSliderWrap, {
+  getState: () => widthOrig,
+  setState: (v) => { widthOrig = v; customWidth = null; },
+  onActivate: () => { widthVal.textContent = 'orig'; },
+  onDeactivate: () => { widthVal.textContent = `${widthMap[widthIndex()]}px`; },
+});
+
+setupOrigToggle(vidWidthOrigBtn, vidWidthSliderWrap, {
+  getState: () => vidWidthOrig,
+  setState: (v) => { vidWidthOrig = v; },
+  onActivate: () => { vidWidthVal.textContent = 'orig'; },
+  onDeactivate: () => { vidWidthVal.textContent = `${widthMap[vidWidthIndex()]}px`; },
+});
+
+// ── CURRENT VALUES ──
+function getCurrentFps() {
+  if (fpsOrig) return 'original';
+  return customFps ?? parseInt(fpsSlider.value);
+}
+function widthIndex() { return Math.round(parseInt(widthSlider.value) / 10); }
+function getCurrentWidth() {
+  if (widthOrig) return 'original';
+  return customWidth ?? widthMap[widthIndex()];
+}
+function vidWidthIndex() { return Math.round(parseInt(vidWidthSlider.value) / 10); }
+function getVidWidth() {
+  if (vidWidthOrig) return 'original';
+  return widthMap[vidWidthIndex()];
+}
+
+// ── SIZE ESTIMATE ──
+const ditherRatios = { sierra2_4a: 2.2, floyd_steinberg: 2.4, bayer: 3.2, none: 4.5 };
+
+function updateEstimate() {
+  if (!videoMeta) { estimateBar.classList.remove('visible'); return; }
+
+  if (outputFormat === 'gif') {
+    const fpsRaw = getCurrentFps();
+    const fps = fpsRaw === 'original' ? 30 : fpsRaw; // estimate with 30 if original
+    const widthRaw = getCurrentWidth();
+    const srcW = videoMeta.videoWidth;
+    const srcH = videoMeta.videoHeight;
+    const outW = widthRaw === 'original' ? srcW : Math.min(widthRaw, srcW);
+    const outH = Math.round(outW * (srcH / srcW));
+    const frames = Math.round(videoMeta.duration * fps);
+    const ratio = ditherRatios[ditherSel.value] || 2.5;
+    const estimated = (outW * outH * frames) / ratio;
+    estimateVal.textContent = '~' + fmtBytes(Math.round(estimated));
+    estimateBar.classList.add('visible');
+  } else {
+    // Rough video estimate based on CRF
+    const crf = parseInt(crfSlider.value);
+    const baseBitrate = 5000000; // ~5Mbps at CRF 18
+    const factor = Math.pow(1.1, 18 - crf);
+    const estimated = (videoMeta.duration * baseBitrate * factor) / 8;
+    estimateVal.textContent = '~' + fmtBytes(Math.round(Math.max(estimated, 10000)));
+    estimateBar.classList.add('visible');
+  }
+}
+
+// ── REUSABLE SLIDER WITH SNAP ──
+const SNAP_RADIUS = 5;
+const SNAP_DURATION = 120;
+
+function setupSlider(slider, { snaps, onInput, onSnap }) {
+  function nearestSnap(value) {
+    let best = null, bestDist = Infinity;
+    for (const s of snaps) {
+      const d = Math.abs(value - s);
+      if (d <= SNAP_RADIUS && d < bestDist) { best = s; bestDist = d; }
+    }
+    return best;
+  }
+
+  function animateSnap(target) {
+    const start = parseInt(slider.value);
+    const dist = target - start;
+    if (dist === 0) { onSnap(target); return; }
+    const t0 = performance.now();
+    (function step(now) {
+      const t = Math.min((now - t0) / SNAP_DURATION, 1);
+      const ease = t * (2 - t);
+      const val = Math.round(start + dist * ease);
+      slider.value = val;
+      onSnap(val);
+      if (t < 1) requestAnimationFrame(step);
+    })(t0);
+  }
+
+  slider.addEventListener('input', () => onInput(parseInt(slider.value)));
+  slider.addEventListener('change', () => {
+    const snap = nearestSnap(parseInt(slider.value));
+    if (snap !== null) animateSnap(snap);
+  });
+}
+
+// ── GIF SLIDERS ──
+setupSlider(fpsSlider, {
+  snaps: [1, 12, 24, 30, 60],
+  onInput: (v) => { customFps = null; fpsOrig = false; fpsOrigBtn.classList.remove('active'); fpsSliderWrap.classList.remove('orig-active'); fpsVal.textContent = v; updateEstimate(); },
+  onSnap:  (v) => { fpsVal.textContent = v; updateEstimate(); },
+});
+
+const widthSnaps = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
+function widthLabel(sliderVal) {
+  return `${widthMap[Math.round(sliderVal / 10)]}px`;
+}
+
+setupSlider(widthSlider, {
+  snaps: widthSnaps,
+  onInput: (v) => { customWidth = null; widthOrig = false; widthOrigBtn.classList.remove('active'); widthSliderWrap.classList.remove('orig-active'); widthVal.textContent = widthLabel(v); updateEstimate(); },
+  onSnap:  (v) => { widthVal.textContent = widthLabel(v); updateEstimate(); },
+});
+
+ditherSel.addEventListener('change', updateEstimate);
+
+// ── VIDEO SLIDERS ──
+setupSlider(vidWidthSlider, {
+  snaps: widthSnaps,
+  onInput: (v) => { vidWidthOrig = false; vidWidthOrigBtn.classList.remove('active'); vidWidthSliderWrap.classList.remove('orig-active'); vidWidthVal.textContent = widthLabel(v); updateEstimate(); },
+  onSnap:  (v) => { vidWidthVal.textContent = widthLabel(v); updateEstimate(); },
+});
+
+setupSlider(crfSlider, {
+  snaps: [0, 18, 23, 32, 51],
+  onInput: (v) => { crfVal.textContent = v; updateEstimate(); },
+  onSnap:  (v) => { crfVal.textContent = v; updateEstimate(); },
+});
+
+codecSel.addEventListener('change', updateEstimate);
+
+// ── EDITABLE VALUES (GIF) ──
+function applyFpsInput() {
+  const text = fpsVal.textContent.trim().toLowerCase();
+  if (text === 'orig' || text === 'original') {
+    fpsOrig = true;
+    customFps = null;
+    fpsOrigBtn.classList.add('active');
+    fpsSliderWrap.classList.add('orig-active');
+    fpsVal.textContent = 'orig';
+    updateEstimate();
+    return;
+  }
+  const raw = parseInt(text);
+  const clamped = isNaN(raw) ? parseInt(fpsSlider.value) : Math.max(1, Math.min(60, raw));
+  fpsOrig = false;
+  fpsOrigBtn.classList.remove('active');
+  fpsSliderWrap.classList.remove('orig-active');
+  customFps = clamped;
+  fpsVal.textContent = clamped;
+  fpsSlider.value = clamped;
+  updateEstimate();
+}
+
+function applyWidthInput() {
+  const raw = widthVal.textContent.trim().toLowerCase().replace('px', '');
+  if (raw === 'orig' || raw === 'original') {
+    widthOrig = true;
+    customWidth = null;
+    widthOrigBtn.classList.add('active');
+    widthSliderWrap.classList.add('orig-active');
+    widthVal.textContent = 'orig';
+  } else {
+    widthOrig = false;
+    widthOrigBtn.classList.remove('active');
+    widthSliderWrap.classList.remove('orig-active');
+    const n = parseInt(raw);
+    if (!isNaN(n) && n > 0) {
+      customWidth = Math.max(1, Math.min(9999, n));
+      widthVal.textContent = `${customWidth}px`;
+      const nearest = widthMap.reduce((best, v, i) => {
+        return Math.abs(v - customWidth) < Math.abs(widthMap[best] - customWidth) ? i : best;
+      }, 0);
+      widthSlider.value = nearest * 10;
+    } else {
+      customWidth = null;
+      widthVal.textContent = `${widthMap[widthIndex()]}px`;
+    }
+  }
+  updateEstimate();
+}
+
+fpsVal.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); fpsVal.blur(); }
+  if (e.key === 'Escape') {
+    customFps = null;
+    fpsVal.textContent = fpsOrig ? 'orig' : fpsSlider.value;
+    fpsVal.blur();
+  }
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    const cur = parseInt(fpsVal.textContent) || parseInt(fpsSlider.value);
+    const next = Math.max(1, Math.min(60, cur + (e.key === 'ArrowUp' ? 1 : -1)));
+    fpsOrig = false;
+    fpsOrigBtn.classList.remove('active');
+    fpsSliderWrap.classList.remove('orig-active');
+    customFps = next;
+    fpsVal.textContent = next;
+    fpsSlider.value = next;
+    updateEstimate();
+  }
+});
+fpsVal.addEventListener('blur', applyFpsInput);
+fpsVal.addEventListener('focus', () => { window.getSelection().selectAllChildren(fpsVal); });
+
+widthVal.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); widthVal.blur(); }
+  if (e.key === 'Escape') {
+    customWidth = null;
+    widthVal.textContent = widthOrig ? 'orig' : `${widthMap[widthIndex()]}px`;
+    widthVal.blur();
+  }
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    const cur = widthIndex();
+    const next = Math.max(0, Math.min(widthMap.length - 1, cur + (e.key === 'ArrowUp' ? 1 : -1)));
+    customWidth = null;
+    widthSlider.value = next * 10;
+    widthOrig = false;
+    widthOrigBtn.classList.remove('active');
+    widthSliderWrap.classList.remove('orig-active');
+    widthVal.textContent = `${widthMap[next]}px`;
+    updateEstimate();
+  }
+});
+widthVal.addEventListener('blur', applyWidthInput);
+widthVal.addEventListener('focus', () => { window.getSelection().selectAllChildren(widthVal); });
+
+// ── EDITABLE VALUES (Video) ──
+vidWidthVal.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); vidWidthVal.blur(); }
+});
+vidWidthVal.addEventListener('blur', () => {
+  const raw = vidWidthVal.textContent.trim().toLowerCase().replace('px', '');
+  if (raw === 'orig' || raw === 'original') {
+    vidWidthOrig = true;
+    vidWidthOrigBtn.classList.add('active');
+    vidWidthSliderWrap.classList.add('orig-active');
+    vidWidthVal.textContent = 'orig';
+  } else {
+    vidWidthOrig = false;
+    vidWidthOrigBtn.classList.remove('active');
+    vidWidthSliderWrap.classList.remove('orig-active');
+    const n = parseInt(raw);
+    if (!isNaN(n) && n > 0) {
+      const nearest = widthMap.reduce((best, v, i) => {
+        return Math.abs(v - n) < Math.abs(widthMap[best] - n) ? i : best;
+      }, 0);
+      vidWidthSlider.value = nearest * 10;
+      vidWidthVal.textContent = `${widthMap[nearest]}px`;
+    } else {
+      vidWidthVal.textContent = vidWidthOrig ? 'orig' : `${widthMap[vidWidthIndex()]}px`;
+    }
+  }
+  updateEstimate();
+});
+vidWidthVal.addEventListener('focus', () => { window.getSelection().selectAllChildren(vidWidthVal); });
+
+// ── FILE HANDLING ──
+function setFile(file) {
+  selectedFile = file;
+  videoMeta = null;
+  fileName.textContent = file.name;
+  fileSize.textContent = fmtBytes(file.size);
+  fileInfo.classList.add('visible');
+  dropzone.classList.add('has-file');
+  dropMain.textContent = 'FILE LOADED';
+  dropSub.innerHTML = `${file.name} — <em>click to replace</em>`;
+  convertBtn.disabled = false;
+  estimateBar.classList.remove('visible');
+
+  const url = URL.createObjectURL(file);
+  const vid = document.createElement('video');
+  vid.preload = 'metadata';
+  vid.src = url;
+  vid.onloadedmetadata = () => {
+    videoMeta = { duration: vid.duration, videoWidth: vid.videoWidth, videoHeight: vid.videoHeight };
+    URL.revokeObjectURL(url);
+    updateEstimate();
+  };
+  vid.onerror = () => URL.revokeObjectURL(url);
+}
+
+function clearFile() {
+  selectedFile = null;
+  videoMeta = null;
+  fileInfo.classList.remove('visible');
+  estimateBar.classList.remove('visible');
+  convertBtn.disabled = true;
+  fileInput.value = '';
+  dropzone.classList.remove('has-file');
+  dropMain.textContent = `DROP ${inputFormat.toUpperCase()} HERE`;
+  dropSub.innerHTML = 'or <em>click to browse</em> — max 500 MB';
+}
+
+dropzone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
+
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+
+clearBtn.addEventListener('click', clearFile);
+
+// ── CONVERT ──
+convertBtn.addEventListener('click', startConvert);
+
+againBtn.addEventListener('click', () => {
+  if (currentSSE) { currentSSE.close(); currentSSE = null; }
+  converting = false;
+  pill1.className = 'pass-pill';
+  pill2.className = 'pass-pill';
+  setProgress(0, 'initialising...', null);
+  progSection.style.display = '';
+  outputBody.classList.remove('has-result');
+  resultSection.classList.remove('visible');
+  errorBox.classList.remove('visible');
+  resultImg.src = '';
+  resultImg.style.display = '';
+  resultVideo.src = '';
+  resultVideo.style.display = 'none';
+  showView('input');
+});
+
+async function startConvert() {
+  if (!selectedFile || converting) return;
+  converting = true;
+
+  // Configure progress indicators based on output format
+  if (outputFormat === 'gif') {
+    passIndicators.style.display = '';
+    pill1.className = 'pass-pill';
+    pill1.textContent = 'PASS1:PALETTE';
+    pill2.className = 'pass-pill';
+    pill2.textContent = 'PASS2:RENDER';
+  } else {
+    passIndicators.style.display = '';
+    pill1.className = 'pass-pill';
+    pill1.textContent = 'ENCODING';
+    pill2.style.display = 'none';
+  }
+
+  setProgress(0, 'uploading...', null);
+  progSection.style.display = '';
+  outputBody.classList.remove('has-result');
+  resultSection.classList.remove('visible');
+  errorBox.classList.remove('visible');
+  resultImg.src = '';
+  resultImg.style.display = '';
+  resultVideo.src = '';
+  resultVideo.style.display = 'none';
+
+  showView('output');
+
+  const fd = new FormData();
+  fd.append('video', selectedFile);
+  fd.append('outputFormat', outputFormat);
+
+  if (outputFormat === 'gif') {
+    const widthValue = getCurrentWidth();
+    fd.append('fps', String(getCurrentFps()));
+    fd.append('width', widthValue === 'original' ? 'original' : String(widthValue));
+    fd.append('dither', ditherSel.value);
+  } else {
+    const w = getVidWidth();
+    fd.append('width', w === 'original' ? 'original' : String(w));
+    fd.append('crf', crfSlider.value);
+    fd.append('codec', codecSel.value);
+  }
+
+  try {
+    const res = await fetch('/convert', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    const { jobId } = await res.json();
+    currentJobId = jobId;
+    listenProgress(jobId);
+  } catch (err) {
+    showError(err.message);
+  }
+}
+
+function listenProgress(jobId) {
+  const sse = new EventSource(`/progress/${jobId}`);
+  currentSSE = sse;
+
+  sse.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+
+    if (data.error) {
+      sse.close();
+      showError(data.message);
+      return;
+    }
+
+    if (outputFormat === 'gif') {
+      if (data.status === 'pass1') {
+        pill1.className = 'pass-pill active';
+        pill2.className = 'pass-pill';
+      } else if (data.status === 'pass2') {
+        pill1.className = 'pass-pill done';
+        pill2.className = 'pass-pill active';
+      }
+    } else {
+      if (data.status === 'encoding') {
+        pill1.className = 'pass-pill active';
+      }
+    }
+
+    setProgress(data.progress || 0, data.message || '', data.status);
+
+    if (data.done) {
+      sse.close();
+      if (outputFormat === 'gif') {
+        pill1.className = 'pass-pill done';
+        pill2.className = 'pass-pill done';
+      } else {
+        pill1.className = 'pass-pill done';
+      }
+      setProgress(100, 'done.', 'done');
+      showResult(data);
+    }
+  };
+
+  sse.onerror = () => {
+    sse.close();
+    showError('connection lost. try again.');
+  };
+}
+
+function setProgress(pct, msg, status) {
+  progFill.style.width = `${pct}%`;
+  progPct.textContent = `${Math.round(pct)}%`;
+  progMsg.textContent = msg;
+  const labels = { done: 'COMPLETE', pass2: 'PASS2:RENDER', pass1: 'PASS1:PALETTE', encoding: 'ENCODING' };
+  progStatus.textContent = labels[status] || 'UPLOADING';
+}
+
+async function showResult(data) {
+  converting = false;
+  const fmt = data.outputFormat || outputFormat;
+
+  let blobUrl;
+  try {
+    const res = await fetch(data.downloadUrl);
+    if (!res.ok) throw new Error('fetch failed');
+    const blob = await res.blob();
+    blobUrl = URL.createObjectURL(blob);
+  } catch {
+    showError('could not load result. try again.');
+    return;
+  }
+
+  downloadBtn.href = blobUrl;
+  const baseName = selectedFile ? selectedFile.name.replace(/\.[^.]+$/, '') : 'converted';
+  downloadBtn.download = `${baseName}.${fmt}`;
+  downloadBtn.textContent = `↓ SAVE ${fmt.toUpperCase()}`;
+
+  // Show preview: image for GIF, video for everything else
+  if (fmt === 'gif') {
+    resultImg.src = blobUrl;
+    resultImg.style.display = '';
+    resultVideo.style.display = 'none';
+  } else {
+    resultVideo.src = blobUrl;
+    resultVideo.style.display = '';
+    resultImg.style.display = 'none';
+  }
+
+  const inp = data.inputSize;
+  const out = data.outputSize;
+  inputFmtLabel.textContent = inputFormat.toUpperCase();
+  outputFmtLabel.textContent = fmt.toUpperCase();
+  inputSizeEl.textContent = fmtBytes(inp);
+  outputSizeEl.textContent = fmtBytes(out);
+
+  const larger = Math.max(inp, out);
+  inputBar.style.width = `${(inp / larger * 100).toFixed(1)}%`;
+  outputBarEl.style.width = `${(out / larger * 100).toFixed(1)}%`;
+
+  const pct = ((1 - out / inp) * 100);
+  reductionVal.textContent = pct > 0 ? `−${pct.toFixed(1)}%` : `+${Math.abs(pct).toFixed(1)}%`;
+
+  progSection.style.display = 'none';
+  outputBody.classList.add('has-result');
+  resultSection.classList.add('visible');
+}
+
+function showError(msg) {
+  converting = false;
+  errorBox.textContent = `!! ERROR: ${msg}`;
+  errorBox.classList.add('visible');
+}
+
+// ── INIT ──
+updateControls();
+updateAccept();
+</script>
+</body>
+</html>
