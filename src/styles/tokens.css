@@ -1,0 +1,37 @@
+:root {
+  --bg:      #F8F7F6;
+  --surface: #EDE8E2;
+  --accent:  #FC006D;
+  --accent-dim: rgba(252, 0, 109, 0.10);
+  --text:    #1a1a1a;
+  --text-muted: #999;
+  --track:   #1a1a2e;
+  --white:   #F8F7F6;
+  --border:  rgba(252, 0, 109, 0.25);
+
+  --font: 'IBM Plex Mono', 'Courier New', monospace;
+  --t-xs:      10px;
+  --t-sm:      12px;
+  --t-label:   12px;
+  --t-base:    13px;
+  --t-md:      15px;
+  --t-lg:      20px;
+  --t-xl:      24px;
+  --t-display: 32px;
+
+  --ls-body:  0px;
+  --ls-label: 2px;
+  --ls-hero:  4px;
+
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-12: 48px;
+
+  --titlebar-h: 32px;
+  --cross-size: 20px;
+  --cross-thick: 2px;
+}

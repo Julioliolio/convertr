@@ -1,0 +1,7 @@
+@import './tokens.css';
+@import './reset.css';
+
+@keyframes label-highlight {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0%   0 0); }
+}
