@@ -12,7 +12,7 @@ const TEMP_DIR = path.join(os.tmpdir(), 'converter');
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public-built')));
 app.use(express.json());
 
 const VALID_INPUT = /\.(mp4|mov|avi|mkv|webm|flv|wmv|gif|m4v|ts|mts|3gp|ogv)$/i;
