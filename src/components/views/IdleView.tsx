@@ -1,10 +1,25 @@
 import { Component, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createDialKit } from 'dialkit/solid';
 import type { VideoInfo } from '../../App';
+import { calculateBBoxTargets } from '../../engine/bbox-calc';
 
 // ── Guide positions ───────────────────────────────────────────────────────────
 const SPLASH = { GL: '2.8%',  GR: '97.2%', GT: '6.13%', GB: '92.4%'  };
-const IDLE   = { GL: '18.1%', GR: '81.9%', GT: '31.2%', GB: '68.8%' };
+
+const pct = (v: number, of: number) => (v / of * 100).toFixed(4) + '%';
+
+// Compute idle bounding box guide percentages from actual viewport dimensions.
+// Uses the same logic as bbox-calc.ts so the idle box is always properly centered
+// and aspect-ratio-constrained regardless of window size.
+function computeIdlePos(vw: number, vh: number) {
+  const { x1, y1, x2, y2 } = calculateBBoxTargets(vw, vh, null, 'idle');
+  return {
+    gl: pct(x1, vw), gr: pct(x2, vw),
+    gt: pct(y1, vh), gb: pct(y2, vh),
+    // Helper text: positioned 85.8% down the box height (preserves original design ratio)
+    helperTop: (y1 + (y2 - y1) * 0.858) + 'px',
+  };
+}
 
 const ACCENT    = '#FC006D';
 const ACCENT_75 = 'rgba(252,0,109,0.75)';
@@ -87,6 +102,14 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     return `cubic-bezier(${x1},${y1},${x2},${y2})`;
   });
 
+  // ── Viewport size (drives responsive idle bbox) ────────────────────────────
+  const [vp, setVp] = createSignal({ vw: 0, vh: 0 });
+  const idlePos = createMemo(() => {
+    const { vw, vh } = vp();
+    if (vw <= 0 || vh <= 0) return computeIdlePos(1, 1); // safe fallback
+    return computeIdlePos(vw, vh);
+  });
+
   // ── Phase state ────────────────────────────────────────────────────────────
   const [phase, setPhase] = createSignal<Phase>('splash');
   const isIdle = createMemo(() => phase() === 'idle');
@@ -107,6 +130,13 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     requestAnimationFrame(() => startTimers());
   };
 
+  // ── DOM refs ───────────────────────────────────────────────────────────────
+  let rootEl!: HTMLDivElement;
+  let vLineL!: HTMLDivElement, vLineR!: HTMLDivElement;
+  let hLineT!: HTMLDivElement, hLineB!: HTMLDivElement;
+  let crossTL!: HTMLDivElement, crossTR!: HTMLDivElement;
+  let crossBL!: HTMLDivElement, crossBR!: HTMLDivElement;
+
   onMount(() => {
     if (hasLaunched) {
       setPhase('idle');
@@ -115,19 +145,21 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       startTimers();
     }
     onCleanup(() => { clearTimeout(t1); clearTimeout(t2); });
+
+    // Track viewport size so idle bbox stays responsive on resize
+    setVp({ vw: rootEl.offsetWidth, vh: rootEl.offsetHeight });
+    const ro = new ResizeObserver(() => {
+      setVp({ vw: rootEl.offsetWidth, vh: rootEl.offsetHeight });
+    });
+    ro.observe(rootEl);
+    onCleanup(() => ro.disconnect());
   });
 
-  // ── DOM refs ───────────────────────────────────────────────────────────────
-  let vLineL!: HTMLDivElement, vLineR!: HTMLDivElement;
-  let hLineT!: HTMLDivElement, hLineB!: HTMLDivElement;
-  let crossTL!: HTMLDivElement, crossTR!: HTMLDivElement;
-  let crossBL!: HTMLDivElement, crossBR!: HTMLDivElement;
-
-  // Guide positions driven by phase
-  const gl = createMemo(() => phase() === 'splash' ? SPLASH.GL : IDLE.GL);
-  const gr = createMemo(() => phase() === 'splash' ? SPLASH.GR : IDLE.GR);
-  const gt = createMemo(() => phase() === 'splash' ? SPLASH.GT : IDLE.GT);
-  const gb = createMemo(() => phase() === 'splash' ? SPLASH.GB : IDLE.GB);
+  // Guide positions driven by phase — idle positions are computed from live viewport size
+  const gl = createMemo(() => phase() === 'splash' ? SPLASH.GL : idlePos().gl);
+  const gr = createMemo(() => phase() === 'splash' ? SPLASH.GR : idlePos().gr);
+  const gt = createMemo(() => phase() === 'splash' ? SPLASH.GT : idlePos().gt);
+  const gb = createMemo(() => phase() === 'splash' ? SPLASH.GB : idlePos().gb);
 
   // Apply guide positions whenever phase or dial values change
   createEffect(() => {
@@ -208,6 +240,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
 
   return (
     <div
+      ref={rootEl}
       style={{
         position: 'fixed', inset: '0', background: BG,
         cursor: isIdle() ? 'pointer' : 'default',
@@ -266,7 +299,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
 
       {/* ── Helper text ───────────────────────────────────────────────────── */}
       <div style={{
-        position: 'absolute', top: '63.47%', left: '50%', translate: '-50% 0',
+        position: 'absolute', top: idlePos().helperTop, left: '50%', translate: '-50% 0',
         display: 'flex', 'flex-direction': 'column', 'align-items': 'center',
         opacity: isIdle() ? '1' : '0',
         transition: `opacity ${p().helper_fade_dur}s ease`,

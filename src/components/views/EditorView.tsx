@@ -1,15 +1,13 @@
 import { Component, createEffect, createSignal, For, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { createDialKit } from 'dialkit/solid';
 import type { VideoInfo } from '../../App';
+import { calculateBBoxTargets } from '../../engine/bbox-calc';
 
 // ── Design tokens (exact from Paper) ──────────────────────────────────────────
 const ACCENT    = '#FC006D';
 const ACCENT_75 = 'rgba(252,0,109,0.75)';
 const BG        = '#F8F7F6';
 const MONO      = "'IBM Plex Mono', system-ui, monospace";
-
-const IDLE_GL = '18.1%'; const IDLE_GR = '81.9%';
-const IDLE_GT = '31.2%'; const IDLE_GB = '68.8%';
 
 const FORMATS = ['GIF', 'AVIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
 
@@ -307,16 +305,20 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   };
 
   const snapToIdle = () => {
-    vLineL.style.left = IDLE_GL; vLineR.style.left = IDLE_GR;
-    hLineT.style.top  = IDLE_GT; hLineB.style.top  = IDLE_GB;
-    crossTL.style.top = `calc(${IDLE_GT} - 10px)`; crossTL.style.left = `calc(${IDLE_GL} - 10px)`;
-    crossTR.style.top = `calc(${IDLE_GT} - 10px)`; crossTR.style.left = `calc(${IDLE_GR} - 10px)`;
-    crossBL.style.top = `calc(${IDLE_GB} - 10px)`; crossBL.style.left = `calc(${IDLE_GL} - 10px)`;
-    crossBR.style.top = `calc(${IDLE_GB} - 10px)`; crossBR.style.left = `calc(${IDLE_GR} - 10px)`;
-    bboxEl.style.left = IDLE_GL; bboxEl.style.top = IDLE_GT;
-    bboxEl.style.width = `calc(${IDLE_GR} - ${IDLE_GL})`; bboxEl.style.height = `calc(${IDLE_GB} - ${IDLE_GT})`;
-    topBarEl.style.left = IDLE_GL; topBarEl.style.width = `calc(${IDLE_GR} - ${IDLE_GL})`;
-    topBarEl.style.top = IDLE_GT;
+    const vw = containerRef.offsetWidth; const vh = containerRef.offsetHeight;
+    const { x1, y1, x2, y2 } = calculateBBoxTargets(vw, vh, null, 'idle');
+    const gl = pct(x1, vw); const gr = pct(x2, vw);
+    const gt = pct(y1, vh); const gb = pct(y2, vh);
+    vLineL.style.left = gl; vLineR.style.left = gr;
+    hLineT.style.top  = gt; hLineB.style.top  = gb;
+    crossTL.style.top = `calc(${gt} - 10px)`; crossTL.style.left = `calc(${gl} - 10px)`;
+    crossTR.style.top = `calc(${gt} - 10px)`; crossTR.style.left = `calc(${gr} - 10px)`;
+    crossBL.style.top = `calc(${gb} - 10px)`; crossBL.style.left = `calc(${gl} - 10px)`;
+    crossBR.style.top = `calc(${gb} - 10px)`; crossBR.style.left = `calc(${gr} - 10px)`;
+    bboxEl.style.left = gl; bboxEl.style.top = gt;
+    bboxEl.style.width = `calc(${gr} - ${gl})`; bboxEl.style.height = `calc(${gb} - ${gt})`;
+    topBarEl.style.left = gl; topBarEl.style.width = `calc(${gr} - ${gl})`;
+    topBarEl.style.top = gt;
   };
 
   // ── Transitions ───────────────────────────────────────────────────────────────
