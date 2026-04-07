@@ -1,7 +1,8 @@
-import { Component, createEffect, createSignal, For, onCleanup, onMount, Show, untrack } from 'solid-js';
+import { Component, createEffect, createSignal, onCleanup, onMount, For, Show, untrack } from 'solid-js';
 import { createDialKit } from 'dialkit/solid';
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
+import Timeline from '../controls/Timeline';
 
 // ── Design tokens (exact from Paper) ──────────────────────────────────────────
 const ACCENT    = '#FC006D';
@@ -185,28 +186,81 @@ const FormatButtonOpen: Component<{ format: string; onClick: () => void }> = (p)
   </div>
 );
 
-// Timeline placeholder (exact structure from Paper)
-const Timeline = () => (
-  <div style={{ display: 'flex', 'align-items': 'center', gap: '4px', 'align-self': 'stretch', height: '24px', 'flex-shrink': '0' }}>
-    <div style={{
-      overflow: 'hidden', height: '24px', flex: '1', position: 'relative',
-      background: BG, outline: `1px solid ${ACCENT}`,
-    }}>
-      {/* Left trim handle */}
-      <div style={{ position: 'absolute', left: '0', top: '0', display: 'flex', 'align-items': 'center' }}>
-        <div style={{ width: '6px', height: '25px', background: ACCENT, 'flex-shrink': '0' }} />
-        <div style={{ position: 'absolute', left: '2px', top: '7px', width: '2px', height: '10px', background: '#F2F4F9' }} />
-      </div>
-      {/* Right trim handle (~97% from left) */}
-      <div style={{ position: 'absolute', left: 'calc(100% - 6px)', top: '0', display: 'flex', 'align-items': 'center' }}>
-        <div style={{ width: '6px', height: '32px', background: ACCENT, 'flex-shrink': '0' }} />
-        <div style={{ position: 'absolute', left: '2px', top: '7px', width: '2px', height: '10px', background: '#F2F4F9' }} />
-      </div>
-      {/* Playhead scrubber (~23% from left) */}
-      <div style={{ position: 'absolute', left: '23%', top: '0', width: '1px', height: '32px', background: ACCENT }} />
-    </div>
-  </div>
-);
+
+// ── PlayPause icon (morphing play ↔ pause via rAF) ────────────────────────────
+const PLAY_1  = "M47.405,46.646 L26.634,26.350 L30.787,22.292 L51.558,42.588 Z";
+const PLAY_2  = "M30.794,62.878 L51.565,42.582 L47.411,38.524 L26.641,58.820 Z";
+const PAUSE_1 = "M27.294,62.272 L27.294,22.904 L33.099,22.904 L33.099,62.272 Z";
+const PAUSE_2 = "M50.904,62.272 L50.904,22.904 L45.099,22.904 L45.099,62.272 Z";
+
+const PlayPauseIcon: Component<{ playing: boolean; width?: number; height?: number }> = (p) => {
+  let ref1!: SVGPathElement;
+  let ref2!: SVGPathElement;
+  let rafId = 0;
+  let initialized = false;
+
+  const nums  = (d: string) => d.match(/-?[\d.]+/g)!.map(Number);
+  const build = (n: number[]) =>
+    `M${n[0]},${n[1]} L${n[2]},${n[3]} L${n[4]},${n[5]} L${n[6]},${n[7]} Z`;
+  const ease  = (t: number) => t < 0.5 ? 2*t*t : -1 + (4 - 2*t)*t;
+
+  const PN1 = nums(PLAY_1),  PN2 = nums(PLAY_2);
+  const AN1 = nums(PAUSE_1), AN2 = nums(PAUSE_2);
+
+  const animateTo = (to1: number[], to2: number[]) => {
+    cancelAnimationFrame(rafId);
+    const f1 = nums(ref1.getAttribute('d')!);
+    const f2 = nums(ref2.getAttribute('d')!);
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const t = ease(Math.min(1, (now - t0) / 180));
+      ref1.setAttribute('d', build(f1.map((v, i) => v + (to1[i] - v) * t)));
+      ref2.setAttribute('d', build(f2.map((v, i) => v + (to2[i] - v) * t)));
+      if (t < 1) rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+  };
+
+  onCleanup(() => cancelAnimationFrame(rafId));
+
+  createEffect(() => {
+    const playing = p.playing;
+    if (!initialized) {
+      ref1.setAttribute('d', playing ? PAUSE_1 : PLAY_1);
+      ref2.setAttribute('d', playing ? PAUSE_2 : PLAY_2);
+      initialized = true;
+    } else {
+      animateTo(playing ? AN1 : PN1, playing ? AN2 : PN2);
+    }
+  });
+
+  return (
+    <svg
+      width={p.width ?? 16} height={p.height ?? 16}
+      viewBox="0 0 79 86" fill="none" preserveAspectRatio="none"
+      style={{ width: `${p.width ?? 16}px`, height: `${p.height ?? 16}px`, 'flex-shrink': '0' }}
+    >
+      <rect width="78.1985" height="85.1755" fill="#FC036D" />
+      <path ref={ref1!} fill="white" stroke="white" stroke-width="2" />
+      <path ref={ref2!} fill="white" stroke="white" stroke-width="2" />
+    </svg>
+  );
+};
+
+const fmtDuration = (s: number) => `${Math.round(s)}s`;
+
+const extractFrames = (src: string, duration: number, count: number): Promise<string[]> =>
+  new Promise((resolve) => {
+    const vid = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    vid.src = src; vid.muted = true; vid.preload = 'auto';
+    const results: string[] = [];
+    let idx = 0; let thumbW = 24;
+    const seekNext = () => { if (idx >= count) { resolve(results); return; } vid.currentTime = (idx / count) * duration + 0.01; };
+    vid.addEventListener('seeked', () => { ctx.drawImage(vid, 0, 0, thumbW, 24); results.push(canvas.toDataURL('image/jpeg', 0.8)); idx++; seekNext(); });
+    vid.addEventListener('loadedmetadata', () => { thumbW = Math.round(24 * vid.videoWidth / vid.videoHeight); canvas.width = thumbW; canvas.height = 24; seekNext(); });
+  });
 
 // ── Component ──────────────────────────────────────────────────────────────────
 const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) => {
@@ -218,6 +272,55 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   let bboxEl!:     HTMLDivElement;
   let topBarEl!:   HTMLDivElement;
   let settingsEl!: HTMLDivElement;
+
+  // ── Video / timeline refs & state ────────────────────────────────────────────
+  let videoRef!: HTMLVideoElement;
+  let durationInputRef!: HTMLInputElement;
+  let isDraggingHandle = false;
+
+  const [duration,        setDuration]        = createSignal(0);
+  const [trimStart,       setTrimStart]       = createSignal(0);
+  const [trimEnd,         setTrimEnd]         = createSignal(0);
+  const [currentTime,     setCurrentTime]     = createSignal(0);
+  const [isPlaying,       setIsPlaying]       = createSignal(false);
+  const [dragging,        setDragging]        = createSignal(false);
+  const [frames,          setFrames]          = createSignal<string[]>([]);
+  const [editingDuration, setEditingDuration] = createSignal(false);
+  const [draftDuration,   setDraftDuration]   = createSignal('');
+
+  const trimmedDuration = () => trimEnd() - trimStart();
+
+  const togglePlay = () => {
+    if (videoRef.paused) videoRef.play().catch(() => {});
+    else videoRef.pause();
+  };
+
+  const handleTrimChange = (start: number, end: number) => {
+    setTrimStart(start); setTrimEnd(end);
+  };
+
+  const handleSeek = (t: number) => {
+    videoRef.currentTime = Math.max(0, Math.min(t, duration()));
+    setCurrentTime(videoRef.currentTime);
+  };
+
+  const shakeInput = () => {
+    durationInputRef.style.animation = 'none';
+    void durationInputRef.offsetWidth;
+    durationInputRef.style.animation = 'timeline-shake 0.35s ease';
+  };
+
+  const commitDuration = () => {
+    const parsed = parseFloat(draftDuration().replace(/[^0-9.]/g, ''));
+    const isValid = !isNaN(parsed) && parsed >= 1 && parsed <= duration() - trimStart();
+    if (isValid) {
+      setTrimEnd(Math.min(trimStart() + parsed, duration()));
+      setEditingDuration(false);
+    } else {
+      shakeInput();
+      setDraftDuration(String(Math.round(trimmedDuration())));
+    }
+  };
 
   // ── Dials ────────────────────────────────────────────────────────────────────
   const layout = createDialKit('Layout', {
@@ -446,7 +549,40 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       setVp({ vw, vh });
     });
     ro.observe(containerRef);
-    onCleanup(() => { ro.disconnect(); if (scrambleTimer != null) clearTimeout(scrambleTimer); });
+
+    // ── Video setup ────────────────────────────────────────────────────────────
+    videoRef.addEventListener('loadedmetadata', () => {
+      const d = videoRef.duration;
+      setDuration(d); setTrimStart(0); setTrimEnd(d);
+      extractFrames(props.video.objectUrl, d, 20).then(setFrames);
+    });
+
+    let rafId: number;
+    const tick = () => {
+      const ct = videoRef.currentTime;
+      const end = trimEnd(); const start = trimStart();
+      if (!isDraggingHandle && (ct >= end || ct < start)) {
+        videoRef.currentTime = start;
+      }
+      setCurrentTime(videoRef.currentTime);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+
+    videoRef.addEventListener('play',  () => setIsPlaying(true));
+    videoRef.addEventListener('pause', () => setIsPlaying(false));
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !editingDuration()) { e.preventDefault(); togglePlay(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+
+    onCleanup(() => {
+      ro.disconnect();
+      if (scrambleTimer != null) clearTimeout(scrambleTimer);
+      cancelAnimationFrame(rafId);
+      document.removeEventListener('keydown', onKeyDown);
+    });
   });
 
   const crossStyle = { position: 'absolute' as const, width: '20px', height: '20px' };
@@ -455,12 +591,24 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
 
   return (
     <div ref={containerRef} style={{ position: 'fixed', inset: '0', background: BG, overflow: 'hidden', '-webkit-app-region': 'drag' } as any}>
+      <style>{`
+        @keyframes timeline-shake {
+          0%   { transform: translateX(0); }
+          15%  { transform: translateX(-5px); }
+          35%  { transform: translateX(5px); }
+          55%  { transform: translateX(-4px); }
+          75%  { transform: translateX(3px); }
+          90%  { transform: translateX(-2px); }
+          100% { transform: translateX(0); }
+        }
+      `}</style>
 
       {/* ── Bounding box (video + overlay) ─────────────────────────────────── */}
       <div ref={bboxEl} style={{ position: 'absolute', overflow: 'hidden', '-webkit-app-region': 'no-drag' } as any}>
         <video
+          ref={videoRef!}
           src={props.video.objectUrl}
-          autoplay loop muted playsinline
+          autoplay muted playsinline
           style={{ width: '100%', height: '100%', display: 'block', 'object-fit': 'cover' }}
         />
         {/* Video overlay — padding: 16px (p-4 from Paper) */}
@@ -485,15 +633,63 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
             <ArrowSvg width={20} height={22} />
           </div>
 
-          {/* Bottom: play + 14s + timeline */}
+          {/* Bottom: play + duration + timeline */}
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px', 'align-self': 'stretch', 'pointer-events': 'auto' }}>
-            {/* Row: play button + 14s duration */}
-            <div style={{ display: 'flex', 'justify-content': 'space-between', 'align-items': 'center' }}>
-              <ChevronSvg width={16} height={16} />
-              <Chip size="xs">14s</Chip>
+            <div style={{ position: 'relative', height: '16px', 'align-self': 'stretch' }}>
+              {/* Play/pause — tracks left trim handle */}
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${(trimStart() / (duration() || 1)) * 100}%`,
+                  height: '16px', display: 'flex', 'align-items': 'center',
+                  cursor: 'pointer',
+                  transition: !dragging() ? 'left 350ms cubic-bezier(1.0,-0.35,0.22,1.15)' : 'none',
+                }}
+                onClick={togglePlay}
+              >
+                <PlayPauseIcon playing={isPlaying()} width={16} height={16} />
+              </div>
+              {/* Duration chip — tracks right trim handle */}
+              <div style={{
+                position: 'absolute',
+                right: `${(1 - trimEnd() / (duration() || 1)) * 100}%`,
+                height: '16px', display: 'flex', 'align-items': 'center',
+                transition: !dragging() ? 'right 350ms cubic-bezier(1.0,-0.35,0.22,1.15)' : 'none',
+              }}>
+                <Show when={editingDuration()} fallback={
+                  <div onClick={() => { setDraftDuration(String(Math.round(trimmedDuration()))); setEditingDuration(true); }} style={{ cursor: 'text' }}>
+                    <Chip size="xs">{fmtDuration(trimmedDuration())}</Chip>
+                  </div>
+                }>
+                  <input
+                    ref={el => { durationInputRef = el; setTimeout(() => el.select(), 0); }}
+                    type="text"
+                    value={draftDuration()}
+                    onInput={e => setDraftDuration(e.currentTarget.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitDuration(); } if (e.key === 'Escape') setEditingDuration(false); }}
+                    onBlur={() => setEditingDuration(false)}
+                    style={{
+                      background: ACCENT, color: BG, border: 'none', outline: 'none',
+                      'font-family': MONO, 'font-size': '12px', 'line-height': '16px',
+                      width: `${Math.max(draftDuration().length, 2) + 1}ch`,
+                      padding: '0', margin: '0', 'caret-color': BG,
+                    }}
+                  />
+                </Show>
+              </div>
             </div>
-            {/* Timeline */}
-            <Timeline />
+            <Timeline
+              duration={duration()}
+              trimStart={trimStart()}
+              trimEnd={trimEnd()}
+              currentTime={currentTime()}
+              onTrimChange={handleTrimChange}
+              onSeek={handleSeek}
+              onHandleDragStart={() => { isDraggingHandle = true; setDragging(true); }}
+              onHandleDragEnd={() => { isDraggingHandle = false; setDragging(false); }}
+              frames={frames()}
+              smooth={!dragging()}
+            />
           </div>
         </div>
       </div>
