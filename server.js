@@ -77,6 +77,49 @@ function getDuration(inputPath) {
   });
 }
 
+function getVideoMeta(inputPath) {
+  return new Promise((resolve) => {
+    const ff = spawn('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height,r_frame_rate,bit_rate',
+      '-show_entries', 'format=duration,size',
+      '-of', 'json',
+      inputPath,
+    ]);
+    let out = '';
+    ff.stdout.on('data', d => (out += d));
+    ff.on('close', () => {
+      try {
+        const j = JSON.parse(out);
+        const s = (j.streams && j.streams[0]) || {};
+        const f = j.format || {};
+        const [num, den] = (s.r_frame_rate || '30/1').split('/').map(Number);
+        resolve({
+          duration:  parseFloat(f.duration) || 0,
+          width:     parseInt(s.width)       || 0,
+          height:    parseInt(s.height)      || 0,
+          fps:       den > 0 ? num / den     : 30,
+          bitrate:   parseInt(f.size ? (f.size * 8 / (parseFloat(f.duration) || 1)) : s.bit_rate) || 0,
+        });
+      } catch { resolve({ duration: 0, width: 0, height: 0, fps: 30, bitrate: 0 }); }
+    });
+  });
+}
+
+function buildGifFilters(opts) {
+  const fpsOriginal = opts.fps === 'original';
+  const fps = fpsOriginal ? null : Math.min(60, Math.max(1, parseInt(opts.fps) || 15));
+  const width = opts.width === 'original' ? -1 : Math.min(1920, Math.max(240, parseInt(opts.width) || 640));
+  const ditherVal = ['sierra2_4a', 'bayer', 'floyd_steinberg', 'none'].includes(opts.dither)
+    ? opts.dither : 'sierra2_4a';
+  const fpsPart = fpsOriginal ? '' : `fps=${fps},`;
+  const scaleFilter = width === -1
+    ? `${fpsPart}scale=iw:-1:flags=lanczos`
+    : `${fpsPart}scale=${width}:-1:flags=lanczos`;
+  return { scaleFilter, ditherVal, fps, fpsOriginal };
+}
+
 function runFFmpeg(args, onProgress) {
   return new Promise((resolve, reject) => {
     const ff = spawn('ffmpeg', ['-y', ...args]);
@@ -101,7 +144,8 @@ function runFFmpeg(args, onProgress) {
 const H265_CAPABLE = new Set(['mp4', 'mkv']);
 
 function getCodecArgs(outputFormat, opts) {
-  const { crf, codec, width } = opts;
+  const { crf, codec, width, fps } = opts;
+  const fpsVal = fps && fps !== 'original' ? Math.min(120, Math.max(1, parseInt(fps) || 0)) : 0;
   const scaleFilter = width === -1 ? null : `scale=${width}:-2`;
 
   let args;
@@ -121,6 +165,7 @@ function getCodecArgs(outputFormat, opts) {
       return ['-c:v', 'libx264', '-crf', '23', '-c:a', 'aac'];
   }
 
+  if (fpsVal > 0) args.push('-r', String(fpsVal));
   if (scaleFilter) args.push('-vf', scaleFilter);
   return args;
 }
@@ -212,7 +257,7 @@ app.post('/fetch', async (req, res) => {
     stderr = (stderr + chunk.toString()).slice(-2048);
   });
 
-  ytdlp.on('close', (code) => {
+  ytdlp.on('close', async (code) => {
     if (code !== 0) {
       broadcast(jobId, { error: true, message: `Download failed: ${stderr.slice(-300) || 'unknown error'}` });
       cleanup(jobId, 5000);
@@ -236,11 +281,13 @@ app.post('/fetch', async (req, res) => {
     }
 
     const inputSize = fs.statSync(inputPath).size;
+    const meta = await getVideoMeta(inputPath);
     const job = jobs.get(jobId);
     if (job) {
       job.status = 'downloaded';
       job.inputPath = inputPath;
       job.inputSize = inputSize;
+      job.meta = meta;
     }
 
     broadcast(jobId, {
@@ -250,13 +297,133 @@ app.post('/fetch', async (req, res) => {
       inputPath,
       inputSize,
       fileName: path.basename(inputPath),
+      meta,
     });
   });
 });
 
+// ── Upload file (stores it for estimation + conversion, avoids double upload) ──
+app.post('/upload', upload.single('video'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const jobId = uuidv4();
+  const inputPath = req.file.path;
+  const inputSize = req.file.size;
+  const meta = await getVideoMeta(inputPath);
+  jobs.set(jobId, { status: 'uploaded', inputPath, inputSize, meta, outputPath: null,
+    uploadTimer: setTimeout(() => cleanup(jobId), 30 * 60 * 1000) });
+  res.json({ jobId, meta });
+});
+
+// ── Estimate output size via 1-second sample encode ──
+app.post('/estimate', async (req, res) => {
+  const { jobId, outputFormat: fmt, fps, width, dither, crf, codec, trimStart: tsRaw, trimEnd: teRaw } = req.body;
+  const job = jobs.get(jobId);
+  if (!job || !job.inputPath || !fs.existsSync(job.inputPath)) {
+    return res.status(404).json({ error: 'Job not found or file missing' });
+  }
+
+  // Kill any running estimate process for this job
+  if (job.estimateProcess) {
+    try { job.estimateProcess.kill('SIGKILL'); } catch {}
+    job.estimateProcess = null;
+  }
+
+  const outputFormat = VALID_OUTPUT.includes(fmt) ? fmt : 'gif';
+  const fullDuration = job.meta ? job.meta.duration : await getDuration(job.inputPath);
+  const trimStart = tsRaw != null ? parseFloat(tsRaw) : 0;
+  const trimEnd   = teRaw != null ? parseFloat(teRaw) : fullDuration;
+  const trimDuration = Math.max(0.1, trimEnd - trimStart);
+
+  // Multi-point sampling: spread 0.5s samples across the clip for accuracy + speed.
+  // Short clips (≤ 2s): 1 sample = full clip.
+  // Medium (2–15s):     2 samples at 33% and 67%.
+  // Long (> 15s):       3 samples at 20%, 50%, 80%.
+  const perSampleDur = Math.min(0.5, trimDuration);
+  let samplePoints;
+  if (trimDuration <= perSampleDur * 2) {
+    samplePoints = [trimStart];
+  } else if (trimDuration < 15) {
+    samplePoints = [trimStart + trimDuration * 0.33, trimStart + trimDuration * 0.67];
+  } else {
+    samplePoints = [trimStart + trimDuration * 0.2, trimStart + trimDuration * 0.5, trimStart + trimDuration * 0.8];
+  }
+
+
+  // Per-sample helpers with unique temp paths to allow parallel execution
+  const samplePath = (i, ext) => path.join(TEMP_DIR, `${jobId}-est${i}.${ext}`);
+  const cleanupAll = (paths) => paths.forEach(f => { try { fs.unlinkSync(f); } catch {} });
+
+  const runEstFFmpegTo = (args, outPath) => new Promise((resolve, reject) => {
+    const ff = spawn('ffmpeg', ['-y', ...args]);
+    job.estimateProcess = ff;
+    let stderr = '';
+    ff.stderr.on('data', c => { stderr = (stderr + c.toString()).slice(-1024); });
+    const timer = setTimeout(() => { ff.kill('SIGKILL'); reject(new Error('estimate timeout')); }, 15000);
+    ff.on('close', code => {
+      clearTimeout(timer);
+      if (code === 0) resolve(fs.existsSync(outPath) ? fs.statSync(outPath).size : 0);
+      else reject(new Error(`FFmpeg exited ${code}: ${stderr.slice(-300)}`));
+    });
+  });
+
+  try {
+    let totalSampleBytes = 0;
+
+    if (outputFormat === 'gif') {
+      const { scaleFilter, ditherVal } = buildGifFilters({ fps, width, dither });
+      // Phase 1: all palette passes in parallel
+      const palettePaths = samplePoints.map((_, i) => samplePath(i, 'png'));
+      await Promise.all(samplePoints.map((start, i) =>
+        runEstFFmpegTo(
+          ['-ss', String(start), '-t', String(perSampleDur), '-i', job.inputPath,
+           '-vf', `${scaleFilter},palettegen=stats_mode=full`, palettePaths[i]],
+          palettePaths[i]
+        )
+      ));
+      // Phase 2: all render passes in parallel (each uses its own palette)
+      const gifPaths = samplePoints.map((_, i) => samplePath(i, 'gif'));
+      const sizes = await Promise.all(samplePoints.map((start, i) =>
+        runEstFFmpegTo(
+          ['-ss', String(start), '-t', String(perSampleDur),
+           '-i', job.inputPath, '-i', palettePaths[i],
+           '-lavfi', `${scaleFilter} [x]; [x][1:v] paletteuse=dither=${ditherVal}`, gifPaths[i]],
+          gifPaths[i]
+        )
+      ));
+      totalSampleBytes = sizes.reduce((a, b) => a + b, 0);
+      cleanupAll([...palettePaths, ...gifPaths]);
+    } else {
+      const w = width === 'original' ? -1 : Math.min(1920, Math.max(240, parseInt(width) || -1));
+      const crfVal = Math.min(51, Math.max(0, parseInt(crf) || 23));
+      const codecArgs = getCodecArgs(outputFormat, { crf: crfVal, codec: codec || 'h264', width: w, fps });
+      const outPaths = samplePoints.map((_, i) => samplePath(i, outputFormat));
+      // All video samples in parallel
+      const sizes = await Promise.all(samplePoints.map((start, i) =>
+        runEstFFmpegTo(
+          ['-ss', String(start), '-t', String(perSampleDur), '-i', job.inputPath, ...codecArgs, outPaths[i]],
+          outPaths[i]
+        )
+      ));
+      totalSampleBytes = sizes.reduce((a, b) => a + b, 0);
+      cleanupAll(outPaths);
+    }
+
+    const avgBytesPerSec = totalSampleBytes / (samplePoints.length * perSampleDur);
+    const estimatedBytes = Math.round(avgBytesPerSec * trimDuration);
+    res.json({ estimatedBytes });
+  } catch (err) {
+    // Best-effort cleanup of any temp estimate files
+    try { cleanupAll(samplePoints.flatMap((_, i) => [samplePath(i, outputFormat), samplePath(i, 'png'), samplePath(i, 'gif')])); } catch {}
+    if (!err.message || err.message === 'estimate timeout' || err.message.includes('SIGKILL')) {
+      return res.status(408).json({ error: 'Estimate timed out' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Convert from a previously fetched URL (uses inputPath from /fetch job) ──
 app.post('/convert-fetched', async (req, res) => {
-  const { jobId, outputFormat: fmt, fps, width, dither, crf, codec } = req.body;
+  const { jobId, outputFormat: fmt, fps, width, dither, crf, codec, trimStart, trimEnd } = req.body;
   const job = jobs.get(jobId);
 
   if (!job || !job.inputPath || !fs.existsSync(job.inputPath)) {
@@ -270,10 +437,11 @@ app.post('/convert-fetched', async (req, res) => {
 
   job.outputPath = outputPath;
   job.outputFormat = outputFormat;
+  if (job.uploadTimer) { clearTimeout(job.uploadTimer); job.uploadTimer = null; }
 
   res.json({ jobId });
 
-  runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, { fps, width, dither, crf, codec });
+  runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, { fps, width, dither, crf, codec, trimStart, trimEnd });
 });
 
 // ── Convert from uploaded file ──
@@ -294,32 +462,32 @@ app.post('/convert', upload.single('video'), async (req, res) => {
 
 // ── Shared conversion logic ──
 function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, opts) {
+  // Parse trim options (seconds as floats)
+  const trimStart = opts.trimStart != null ? parseFloat(opts.trimStart) : null;
+  const trimEnd   = opts.trimEnd   != null ? parseFloat(opts.trimEnd)   : null;
+  const hasTrim   = trimStart != null && trimEnd != null && trimEnd > trimStart;
+  const trimArgs  = hasTrim ? ['-ss', String(trimStart), '-to', String(trimEnd)] : [];
+  const trimDuration = hasTrim ? (trimEnd - trimStart) : null;
+
   if (outputFormat === 'gif') {
     // ── GIF: 2-pass palette pipeline ──
-    const fpsOriginal = opts.fps === 'original';
-    const fps = fpsOriginal ? null : Math.min(60, Math.max(1, parseInt(opts.fps) || 15));
-    const width = opts.width === 'original' ? -1 : Math.min(1920, Math.max(240, parseInt(opts.width) || 640));
-    const ditherVal = ['sierra2_4a', 'bayer', 'floyd_steinberg', 'none'].includes(opts.dither)
-      ? opts.dither : 'sierra2_4a';
-
+    const { scaleFilter, ditherVal, fps } = buildGifFilters(opts);
     const palettePath = path.join(TEMP_DIR, `${jobId}-palette.png`);
-    const fpsPart = fpsOriginal ? '' : `fps=${fps},`;
-    const scaleFilter = width === -1
-      ? `${fpsPart}scale=iw:-1:flags=lanczos`
-      : `${fpsPart}scale=${width}:-1:flags=lanczos`;
 
     const job = jobs.get(jobId);
     Object.assign(job, { status: 'queued', progress: 0, message: 'Starting...', palettePath, outputPath, outputFormat });
 
     (async () => {
       try {
-        const duration = await getDuration(inputPath);
+        const fullDuration = await getDuration(inputPath);
+        const duration = trimDuration != null ? trimDuration : fullDuration;
         const estFrames = Math.max(1, Math.round(duration * (fps || 30)));
 
         job.status = 'pass1';
         broadcast(jobId, { status: 'pass1', progress: 35, message: 'Pass 1: building palette...' });
 
         await runFFmpeg([
+          ...trimArgs,
           '-i', inputPath,
           '-vf', `${scaleFilter},palettegen=stats_mode=full`,
           palettePath,
@@ -331,6 +499,7 @@ function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, op
         broadcast(jobId, { status: 'pass2', progress: 62, message: 'Pass 2: rendering GIF...' });
 
         await runFFmpeg([
+          ...trimArgs,
           '-i', inputPath,
           '-i', palettePath,
           '-lavfi', `${scaleFilter} [x]; [x][1:v] paletteuse=dither=${ditherVal}`,
@@ -364,21 +533,24 @@ function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, op
     const width = opts.width === 'original' ? -1 : Math.min(1920, Math.max(240, parseInt(opts.width) || -1));
     const crf = Math.min(51, Math.max(0, parseInt(opts.crf) || 23));
     const codec = opts.codec || 'h264';
+    const fps = opts.fps;
 
     const job = jobs.get(jobId);
     Object.assign(job, { status: 'queued', progress: 0, message: 'Starting...', outputPath, outputFormat });
 
     (async () => {
       try {
-        const duration = await getDuration(inputPath);
+        const fullDuration = await getDuration(inputPath);
+        const duration = trimDuration != null ? trimDuration : fullDuration;
         const estFrames = Math.max(1, Math.round(duration * 30));
 
         job.status = 'encoding';
         broadcast(jobId, { status: 'encoding', progress: 35, message: 'Encoding...' });
 
-        const codecArgs = getCodecArgs(outputFormat, { crf, codec, width });
+        const codecArgs = getCodecArgs(outputFormat, { crf, codec, width, fps });
 
         await runFFmpeg([
+          ...trimArgs,
           '-i', inputPath,
           ...codecArgs,
           outputPath,
@@ -439,6 +611,13 @@ app.get('/serve/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job || !job.outputPath || !fs.existsSync(job.outputPath)) return res.status(404).json({ error: 'Not found' });
   res.sendFile(job.outputPath);
+});
+
+// Serve the downloaded/uploaded input file (used for video preview before conversion)
+app.get('/input/:jobId', (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job || !job.inputPath || !fs.existsSync(job.inputPath)) return res.status(404).json({ error: 'Not found' });
+  res.sendFile(job.inputPath);
 });
 
 // Download triggers cleanup after a delay (user explicitly saving)

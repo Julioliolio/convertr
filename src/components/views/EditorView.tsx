@@ -3,6 +3,12 @@ import { createDialKit } from 'dialkit/solid';
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import Timeline from '../controls/Timeline';
+import ControlPanel from '../layout/ControlPanel';
+import { startConversion } from '../../api/convert';
+import { listenProgress } from '../../api/progress';
+import { uploadFile } from '../../api/upload';
+import { fetchEstimate, cancelEstimate } from '../../api/estimate';
+import { appState, setAppState, fps, width, vidWidth, crf } from '../../state/app';
 
 // ── Design tokens (exact from Paper) ──────────────────────────────────────────
 const ACCENT    = '#FC006D';
@@ -10,7 +16,8 @@ const ACCENT_75 = 'rgba(252,0,109,0.75)';
 const BG        = '#F8F7F6';
 const MONO      = "'IBM Plex Mono', system-ui, monospace";
 
-const FORMATS = ['GIF', 'AVIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
+// Server-supported formats (lowercase); AVIF not supported server-side
+const FORMATS = ['GIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
 
 const pct = (v: number, of: number) => (v / of * 100).toFixed(4) + '%';
 
@@ -288,7 +295,112 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const [editingDuration, setEditingDuration] = createSignal(false);
   const [draftDuration,   setDraftDuration]   = createSignal('');
 
+  // ── Conversion state ─────────────────────────────────────────────────────────
+  const [isConverting,   setIsConverting]   = createSignal(false);
+  const [resultUrl,      setResultUrl]      = createSignal<string | null>(null);
+  const [resultFilename, setResultFilename] = createSignal<string | null>(null);
+
   const trimmedDuration = () => trimEnd() - trimStart();
+
+  // ── Estimated output size ─────────────────────────────────────────────────────
+  const fmtBytes = (bytes: number) => {
+    const mb = bytes / 1_048_576;
+    if (mb < 0.1) return '<0.1 MB';
+    if (mb < 10)  return mb.toFixed(1) + ' MB';
+    return Math.round(mb) + ' MB';
+  };
+
+  // Analytical fallback (instant, shown while waiting for server estimate)
+  const analyticalSize = () => {
+    const dur = trimEnd() - trimStart();
+    if (dur <= 0) return '—';
+    const fmt = appState.outputFormat;
+    const srcW = props.video.width;
+    const srcH = props.video.height;
+    let bytes: number;
+    if (fmt === 'gif') {
+      const w = width() > 0 ? width() : srcW;
+      const h = Math.round(w * srcH / srcW);
+      bytes = (w * h * fps() * dur) / 3;
+    } else {
+      const w = vidWidth() > 0 ? vidWidth() : srcW;
+      const h = Math.round(w * srcH / srcW);
+      const bpp = 0.07 * Math.pow(2, (23 - crf()) / 6);
+      bytes = (w * h * bpp * 30 * dur) / 8;
+      bytes += (128_000 / 8) * dur;
+    }
+    return fmtBytes(bytes) + '?';
+  };
+
+  // ── Size display with scramble animation ────────────────────────────────────
+  // displaySize holds only the prefix (digits or "..."), " MB" is rendered statically
+  const SCRAMBLE_CHARS = '0123456789!@#%&';
+  const [displaySize, setDisplaySize] = createSignal('—');
+  let scrambleRaf = 0;
+
+  // Strip trailing " MB" or "?" suffix before scrambling, add back in render
+  const stripSuffix = (s: string) => s.replace(/ MB\??$/, '').replace(/\?$/, '');
+
+  const scrambleTo = (target: string) => {
+    cancelAnimationFrame(scrambleRaf);
+    const from = displaySize();
+    const t = stripSuffix(target);
+    const len = Math.max(from.length, t.length);
+    const pad = (s: string) => s.padEnd(len, ' ');
+    const f = pad(from), tt = pad(t);
+    const totalFrames = 18;
+    const frameMs = 30;
+    let frame = 0;
+    let last = performance.now();
+
+    const tick = (now: number) => {
+      if (now - last < frameMs) { scrambleRaf = requestAnimationFrame(tick); return; }
+      last = now;
+      frame++;
+      if (frame >= totalFrames) { setDisplaySize(t.trimEnd() || '—'); return; }
+      const resolved = Math.floor((frame / totalFrames) * len);
+      const result = tt.split('').map((ch, i) => {
+        if (i < resolved) return tt[i];
+        if (f[i] === ' ' && tt[i] === ' ') return ' ';
+        return SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
+      }).join('').trimEnd();
+      setDisplaySize(result || '—');
+      scrambleRaf = requestAnimationFrame(tick);
+    };
+    scrambleRaf = requestAnimationFrame(tick);
+  };
+
+  // Run an estimate — call this explicitly (not reactively on trim)
+  const runEstimate = () => {
+    const jobId = appState.uploadJobId;
+    if (!appState.uploadReady || !jobId) return;
+    cancelEstimate();
+    scrambleTo('...');
+    setAppState('estimating', true);
+    fetchEstimate({
+      jobId,
+      outputFormat: appState.outputFormat,
+      fps: fps(), width: appState.outputFormat === 'gif' ? width() : vidWidth(),
+      dither: appState.dither, crf: crf(), codec: appState.codec,
+      trimStart: trimStart(), trimEnd: trimEnd(),
+    }).then(bytes => {
+      const result = bytes != null ? fmtBytes(bytes) : analyticalSize();
+      if (bytes != null) setAppState('estimatedBytes', bytes);
+      setAppState('estimating', false);
+      scrambleTo(result);
+    });
+  };
+
+  // Re-estimate when non-trim params change (debounced), but not during drag
+  let estimateTimer = 0;
+  createEffect(() => {
+    const ready = appState.uploadReady; const jobId = appState.uploadJobId;
+    appState.outputFormat; fps(); width(); vidWidth(); crf(); appState.dither; appState.codec;
+    clearTimeout(estimateTimer);
+    if (!ready || !jobId || isDraggingHandle) return;
+    estimateTimer = window.setTimeout(runEstimate, 400);
+    onCleanup(() => clearTimeout(estimateTimer));
+  });
 
   const togglePlay = () => {
     if (videoRef.paused) videoRef.play().catch(() => {});
@@ -363,28 +475,11 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const [vp,            setVp]            = createSignal({ vw: 0, vh: 0 });
   const [fmtOpen,       setFmtOpen]       = createSignal(false);
   const [format,        setFormat]        = createSignal(FORMATS[0]);
-  const [displayFormat, setDisplayFormat] = createSignal(FORMATS[0]);
 
-  // ── Scramble animation ────────────────────────────────────────────────────────
-  const SCRAMBLE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let scrambleTimer: ReturnType<typeof setTimeout> | null = null;
-  const scramble = (target: string) => {
-    if (scrambleTimer != null) clearTimeout(scrambleTimer);
-    const totalFrames = 14;
-    const frameMs = 35;
-    let frame = 0;
-    const tick = () => {
-      frame++;
-      if (frame >= totalFrames) { setDisplayFormat(target); return; }
-      const resolved = Math.floor((frame / totalFrames) * target.length);
-      const scrambled = target.split('').map((ch, i) =>
-        i < resolved ? ch : SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)]
-      ).join('');
-      setDisplayFormat(scrambled);
-      scrambleTimer = setTimeout(tick, frameMs);
-    };
-    tick();
-  };
+  // Keep appState.outputFormat in sync with local format picker
+  createEffect(() => {
+    setAppState('outputFormat', format().toLowerCase() as any);
+  });
 
   // ── DOM setters ───────────────────────────────────────────────────────────────
   const applyBox = (b: BoxResult) => {
@@ -522,6 +617,16 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
 
   const triggerExit = () => {
     if (isExiting) return; isExiting = true;
+    setAppState('selectedFile',   null);
+    setAppState('fileUrl',        null);
+    setAppState('converting',     false);
+    setAppState('progress',       0);
+    setAppState('progressMsg',    '');
+    setAppState('uploadJobId',    null);
+    setAppState('uploadReady',    false);
+    setAppState('estimatedBytes', null);
+    setAppState('estimating',     false);
+    cancelEstimate();
     const a = anim(); const b = box();
     if (!b) { props.onBack(); return; }
     const tr = buildTr(a, !b.isLandscape);
@@ -549,6 +654,54 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       setVp({ vw, vh });
     });
     ro.observe(containerRef);
+
+    // ── Wire app state for ControlPanel ───────────────────────────────────────
+    setAppState('selectedFile',   props.video.file ?? null);
+    setAppState('fileUrl',        props.video.url  ?? null);
+    setAppState('estimatedBytes', null);
+    setAppState('uploadReady',    false);
+    setAppState('uploadJobId',    null);
+
+    // ── Upload file to server immediately for estimation + conversion ─────────
+    if (props.video.file) {
+      uploadFile(props.video.file).then(result => {
+        if (result) {
+          setAppState('uploadJobId',  result.jobId);
+          setAppState('currentJobId', result.jobId);
+          setAppState('uploadReady',  true);
+        }
+      });
+    } else if (props.video.url && appState.currentJobId) {
+      // URL mode: file already on server from /fetch
+      setAppState('uploadJobId', appState.currentJobId);
+      setAppState('uploadReady', true);
+    }
+
+    // ── convertr:run handler ──────────────────────────────────────────────────
+    const handleRun = async () => {
+      if (isConverting()) return;
+      setIsConverting(true);
+      setAppState('converting', true);
+      setAppState('progress',    0);
+      setAppState('progressMsg', 'Starting...');
+      setResultUrl(null);
+      setResultFilename(null);
+
+      const jobId = await startConversion(trimStart(), trimEnd());
+      if (!jobId) {
+        setIsConverting(false);
+        setAppState('converting', false);
+        return;
+      }
+
+      listenProgress(jobId, (url, filename) => {
+        setResultUrl(url);
+        setResultFilename(filename);
+        setIsConverting(false);
+      });
+    };
+    document.addEventListener('convertr:run', handleRun);
+    onCleanup(() => document.removeEventListener('convertr:run', handleRun));
 
     // ── Video setup ────────────────────────────────────────────────────────────
     videoRef.addEventListener('loadedmetadata', () => {
@@ -579,8 +732,8 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
 
     onCleanup(() => {
       ro.disconnect();
-      if (scrambleTimer != null) clearTimeout(scrambleTimer);
       cancelAnimationFrame(rafId);
+      cancelAnimationFrame(scrambleRaf);
       document.removeEventListener('keydown', onKeyDown);
     });
   });
@@ -625,12 +778,17 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
             {/* Left: EXPECTED SIZE stacked chips */}
             <div style={{ display: 'flex', 'flex-direction': 'column' }}>
               <Chip>EXPECTED SIZE</Chip>
-              <Chip>27.5 MB</Chip>
+              <Chip>{displaySize() === '—' ? '—' : `${displaySize()} MB`}</Chip>
             </div>
             {/* Center: + cross */}
             <Cross />
-            {/* Right: → arrow */}
-            <ArrowSvg width={20} height={22} />
+            {/* Right: → arrow (triggers conversion) */}
+            <div
+              style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
+              onClick={() => document.dispatchEvent(new CustomEvent('convertr:run'))}
+            >
+              <ArrowSvg width={20} height={22} />
+            </div>
           </div>
 
           {/* Bottom: play + duration + timeline */}
@@ -686,7 +844,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               onTrimChange={handleTrimChange}
               onSeek={handleSeek}
               onHandleDragStart={() => { isDraggingHandle = true; setDragging(true); }}
-              onHandleDragEnd={() => { isDraggingHandle = false; setDragging(false); }}
+              onHandleDragEnd={() => { isDraggingHandle = false; setDragging(false); runEstimate(); }}
               frames={frames()}
               smooth={!dragging()}
             />
@@ -709,9 +867,9 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
           'flex-shrink': '0',
         }}>
           <Show when={fmtOpen()} fallback={
-            <FormatButtonClosed format={displayFormat()} onClick={() => setFmtOpen(true)} />
+            <FormatButtonClosed format={format()} onClick={() => setFmtOpen(true)} />
           }>
-            <FormatButtonOpen format={displayFormat()} onClick={() => setFmtOpen(false)} />
+            <FormatButtonOpen format={format()} onClick={() => setFmtOpen(false)} />
           </Show>
           <div style={{ cursor: 'pointer' }} onClick={triggerExit}>
             <XSvg width={20} height={22} />
@@ -730,7 +888,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
             {(fmt) => (
               <div
                 style={{ 'font-family': MONO, 'font-size': '16px', 'line-height': '20px', color: ACCENT, cursor: 'pointer', 'user-select': 'none' }}
-                onClick={() => { setFormat(fmt); scramble(fmt); setFmtOpen(false); }}
+                onClick={() => { setFormat(fmt); setFmtOpen(false); }}
               >
                 {fmt}
               </div>
@@ -739,18 +897,96 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         </div>
       </div>
 
-      {/* ── VIDEO SETTINGS label ────────────────────────────────────────────── */}
+      {/* ── VIDEO SETTINGS + ControlPanel ──────────────────────────────────── */}
       <div
         ref={settingsEl}
-        style={{ position: 'absolute', cursor: 'pointer', '-webkit-app-region': 'no-drag' } as any}
+        style={{ position: 'absolute', '-webkit-app-region': 'no-drag', 'min-width': '200px' } as any}
       >
         <span style={{
           'font-family': MONO, 'font-size': '16px', 'line-height': '20px',
-          color: ACCENT, 'white-space': 'nowrap',
+          color: ACCENT, 'white-space': 'nowrap', display: 'block', 'margin-bottom': '12px',
         }}>
           VIDEO SETTINGS
         </span>
+        <ControlPanel />
       </div>
+
+      {/* ── Converting overlay ──────────────────────────────────────────────── */}
+      <Show when={isConverting()}>
+        <div style={{
+          position: 'fixed', inset: '0',
+          background: 'rgba(248,247,246,0.92)',
+          display: 'flex', 'flex-direction': 'column',
+          'align-items': 'center', 'justify-content': 'center',
+          gap: '12px',
+          'font-family': MONO,
+          'z-index': '100',
+        }}>
+          <span style={{ color: ACCENT, 'font-size': '12px', 'line-height': '16px' }}>
+            {appState.progressMsg || 'Converting...'}
+          </span>
+          <div style={{ width: '200px', height: '2px', background: 'rgba(252,0,109,0.2)', 'border-radius': '1px' }}>
+            <div style={{
+              width: `${appState.progress}%`, height: '100%',
+              background: ACCENT, transition: 'width 0.3s', 'border-radius': '1px',
+            }} />
+          </div>
+          <span style={{ color: ACCENT, 'font-size': '12px', 'line-height': '16px' }}>
+            {Math.round(appState.progress)}%
+          </span>
+        </div>
+      </Show>
+
+      {/* ── Result overlay ──────────────────────────────────────────────────── */}
+      <Show when={resultUrl()}>
+        <div style={{
+          position: 'fixed', inset: '0',
+          background: BG,
+          display: 'flex', 'flex-direction': 'column',
+          'align-items': 'center', 'justify-content': 'center',
+          gap: '16px',
+          'z-index': '100',
+        }}>
+          <Show when={appState.outputFormat === 'gif'} fallback={
+            <video
+              src={resultUrl()!}
+              controls
+              style={{ 'max-width': '80%', 'max-height': '60vh', display: 'block' }}
+            />
+          }>
+            <img
+              src={resultUrl()!}
+              alt="Result"
+              style={{ 'max-width': '80%', 'max-height': '60vh', display: 'block' }}
+            />
+          </Show>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <a
+              href={`/download/${appState.currentJobId}`}
+              download={resultFilename() || 'output'}
+              style={{ 'text-decoration': 'none' }}
+            >
+              <div style={{
+                background: ACCENT, color: BG,
+                'font-family': MONO, 'font-size': '12px', 'line-height': '16px',
+                padding: '8px 16px', cursor: 'pointer',
+              }}>
+                DOWNLOAD
+              </div>
+            </a>
+            <div
+              style={{
+                background: 'transparent', color: ACCENT, border: `1px solid ${ACCENT}`,
+                'font-family': MONO, 'font-size': '12px', 'line-height': '16px',
+                padding: '8px 16px', cursor: 'pointer', 'box-sizing': 'border-box',
+              }}
+              onClick={() => { setResultUrl(null); setResultFilename(null); setAppState('progress', 0); }}
+            >
+              CLOSE
+            </div>
+          </div>
+        </div>
+      </Show>
 
       {/* ── Guide lines ─────────────────────────────────────────────────────── */}
       <div ref={vLineL} style={{ position: 'absolute', top: '0', bottom: '0', width: '1px', background: ACCENT_75, 'pointer-events': 'none' }} />

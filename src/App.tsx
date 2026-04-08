@@ -1,4 +1,4 @@
-import { Component, createSignal, Show } from 'solid-js';
+import { Component, Show, createSignal } from 'solid-js';
 import IdleView from './components/views/IdleView';
 import EditorView from './components/views/EditorView';
 import PlaygroundView from './components/views/PlaygroundView';

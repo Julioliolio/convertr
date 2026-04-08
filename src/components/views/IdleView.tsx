@@ -1,7 +1,8 @@
-import { Component, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Component, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createDialKit } from 'dialkit/solid';
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
+import { setAppState } from '../../state/app';
 
 // ── Guide positions ───────────────────────────────────────────────────────────
 const SPLASH = { GL: '2.8%',  GR: '97.2%', GT: '6.13%', GB: '92.4%'  };
@@ -182,6 +183,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
 
   // ── File / URL handlers ────────────────────────────────────────────────────
   const [dragOver, setDragOver] = createSignal(false);
+  const [fetchStatus, setFetchStatus] = createSignal<string | null>(null);
   let fileInputRef!: HTMLInputElement;
 
   const handleFile = (file: File) => {
@@ -218,17 +220,57 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     if (file) handleFile(file);
   };
 
-  const handlePaste = (e: ClipboardEvent) => {
+  const handlePaste = async (e: ClipboardEvent) => {
     const text = e.clipboardData?.getData('text');
-    if (text?.startsWith('http://') || text?.startsWith('https://')) {
-      props.onVideoSelected({
-        url: text,
-        name: text.split('/').pop() ?? 'video',
-        sizeBytes: 0,
-        width: 16,
-        height: 9,
-        objectUrl: text,
+    if (!text?.startsWith('http://') && !text?.startsWith('https://')) return;
+
+    setFetchStatus('Fetching…');
+    try {
+      const res = await fetch('/fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: text }),
       });
+      if (!res.ok) { setFetchStatus('Failed to fetch URL'); return; }
+      const { jobId } = await res.json();
+
+      // Listen for download progress via SSE
+      const sse = new EventSource(`/progress/${jobId}`);
+      sse.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (data.message) setFetchStatus(data.message);
+          if (data.error) {
+            sse.close();
+            setFetchStatus(`Error: ${data.message ?? 'Download failed'}`);
+            setTimeout(() => setFetchStatus(null), 3000);
+            return;
+          }
+          if (data.status === 'downloaded') {
+            sse.close();
+            setFetchStatus(null);
+            const meta = data.meta ?? {};
+            // Store job id in app state so EditorView picks it up
+            setAppState('currentJobId', jobId);
+            props.onVideoSelected({
+              url: text,
+              name: data.fileName ?? text.split('/').pop() ?? 'video',
+              sizeBytes: data.inputSize ?? 0,
+              width:  meta.width  || 1280,
+              height: meta.height || 720,
+              objectUrl: `/input/${jobId}`,
+            });
+          }
+        } catch { /* ignore */ }
+      };
+      sse.onerror = () => {
+        sse.close();
+        setFetchStatus('Connection error');
+        setTimeout(() => setFetchStatus(null), 3000);
+      };
+    } catch {
+      setFetchStatus('Failed to fetch URL');
+      setTimeout(() => setFetchStatus(null), 3000);
     }
   };
 
@@ -307,6 +349,21 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         <span style={{ 'font-family': "'IBM Plex Mono', system-ui, monospace", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>click to browse - max 500mb</span>
         <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>ctrl+v anywhere to paste URL</span>
       </div>
+
+      {/* ── URL fetch status ──────────────────────────────────────────────── */}
+      <Show when={fetchStatus()}>
+        <div style={{
+          position: 'absolute', bottom: '24px', left: '50%', translate: '-50% 0',
+          background: ACCENT, color: BG,
+          'font-family': "'IBM Plex Mono', system-ui, monospace",
+          'font-size': '12px', 'line-height': '16px', 'font-weight': '500',
+          padding: '6px 14px',
+          'pointer-events': 'none',
+          'white-space': 'nowrap',
+        }}>
+          {fetchStatus()}
+        </div>
+      </Show>
 
       <input ref={fileInputRef} type="file" accept="video/*,image/gif,image/*" style={{ display: 'none' }} onChange={handleFileInput} />
     </div>

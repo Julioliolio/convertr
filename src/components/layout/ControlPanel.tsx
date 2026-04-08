@@ -37,6 +37,15 @@ const ControlPanel: Component = () => {
       <Show when={!isGif()}>
         <div class="ctrl-group">
           <Slider
+            label="FPS"
+            unit="FPS"
+            min={1}
+            max={60}
+            value={fps}
+            onChange={setFps}
+            snaps={fpsSnaps}
+          />
+          <Slider
             label="WIDTH"
             unit="PX"
             min={0}

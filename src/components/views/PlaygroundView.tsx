@@ -1,4 +1,4 @@
-import { Component, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { Component, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import Timeline from '../controls/Timeline';
 
 const ACCENT = '#FC006D';
@@ -104,13 +104,54 @@ const Cross = () => (
   </div>
 );
 
+const DropZone: Component<{ onFile: (file: File) => void }> = (p) => {
+  let inputRef!: HTMLInputElement;
+  const [hover, setHover] = createSignal(false);
+
+  const load = (file: File) => {
+    if (file.type.startsWith('video/')) p.onFile(file);
+  };
+
+  return (
+    <div
+      onClick={() => inputRef.click()}
+      onDragOver={e => { e.preventDefault(); setHover(true); }}
+      onDragLeave={() => setHover(false)}
+      onDrop={e => { e.preventDefault(); setHover(false); const f = e.dataTransfer?.files[0]; if (f) load(f); }}
+      style={{
+        width: '480px', height: '270px',
+        display: 'flex', 'flex-direction': 'column',
+        'align-items': 'center', 'justify-content': 'center', gap: '16px',
+        outline: `2px solid ${hover() ? ACCENT : '#ccc'}`,
+        cursor: 'pointer',
+        'font-family': MONO, 'font-size': '13px', color: hover() ? ACCENT : '#999',
+        transition: 'outline-color 0.15s, color 0.15s',
+        background: BG,
+        'user-select': 'none',
+      }}
+    >
+      <ArrowSvg width={28} height={30} />
+      <span>drop a video or click to browse</span>
+      <input ref={inputRef!} type="file" accept="video/*" style={{ display: 'none' }}
+        onChange={e => { const f = e.currentTarget.files?.[0]; if (f) load(f); }} />
+    </div>
+  );
+};
+
 const PlaygroundView: Component = () => {
   let videoRef!: HTMLVideoElement;
   let durationInputRef!: HTMLInputElement;
   let isDraggingHandle = false;
-  const [dragging,     setDragging]     = createSignal(false);
-  const [orientation,  setOrientation]  = createSignal<'landscape' | 'portrait'>('landscape');
+  const [dragging,       setDragging]       = createSignal(false);
+  const [orientation,    setOrientation]    = createSignal<'landscape' | 'portrait'>('landscape');
+  const [videoSrc,       setVideoSrc]       = createSignal<string | null>(null);
   const box = () => ORIENTATIONS[orientation()];
+
+  const loadFile = (file: File) => {
+    const prev = videoSrc();
+    if (prev) URL.revokeObjectURL(prev);
+    setVideoSrc(URL.createObjectURL(file));
+  };
 
   const [duration,    setDuration]    = createSignal(0);
   const [trimStart,   setTrimStart]   = createSignal(0);
@@ -162,7 +203,8 @@ const PlaygroundView: Component = () => {
       setDuration(d);
       setTrimStart(0);
       setTrimEnd(d);
-      extractFrames('/dev-mock.mp4', d, 20).then(setFrames);
+      const src = videoSrc() ?? '/dev-mock.mp4';
+      extractFrames(src, d, 20).then(setFrames);
     });
 
     // Track playhead + confine playback to trim region
@@ -249,29 +291,18 @@ const PlaygroundView: Component = () => {
       'align-items': 'center',
       'justify-content': 'center',
     }}>
-      {/* Orientation toggle */}
-      <button
-        onClick={() => setOrientation(o => o === 'landscape' ? 'portrait' : 'landscape')}
-        style={{
-          position: 'fixed', top: '16px', right: '16px',
-          background: ACCENT, color: BG, border: 'none',
-          'font-family': MONO, 'font-size': '11px', 'line-height': '1',
-          padding: '6px 10px', cursor: 'pointer',
-          'z-index': '100',
-        }}
-      >
-        {orientation() === 'landscape' ? '↕ portrait' : '↔ landscape'}
-      </button>
+      {/* Video is always in the DOM so videoRef is always bound */}
       <div style={{
         position: 'relative',
         width: `${box().boxW}px`,
         height: `${box().boxH}px`,
         overflow: 'hidden',
-        outline: `1px solid ${ACCENT}`,
+        outline: videoSrc() ? `1px solid ${ACCENT}` : 'none',
+        display: videoSrc() ? 'block' : 'none',
       }}>
         <video
           ref={videoRef!}
-          src="/dev-mock.mp4"
+          src={videoSrc() ?? ''}
           autoplay
           loop
           muted
@@ -350,6 +381,28 @@ const PlaygroundView: Component = () => {
           </div>
         </div>
       </div>
+
+      {/* Orientation toggle — only shown when video is loaded */}
+      <Show when={videoSrc()}>
+        <button
+          onClick={() => setOrientation(o => o === 'landscape' ? 'portrait' : 'landscape')}
+          style={{
+            position: 'fixed', top: '16px', right: '16px',
+            background: ACCENT, color: BG, border: 'none',
+            'font-family': MONO, 'font-size': '11px', 'line-height': '1',
+            padding: '6px 10px', cursor: 'pointer',
+            'z-index': '100',
+          }}
+        >
+          {orientation() === 'landscape' ? '↕ portrait' : '↔ landscape'}
+        </button>
+      </Show>
+
+      {/* Drop zone shown until a video is loaded */}
+      <Show when={!videoSrc()}>
+        <DropZone onFile={loadFile} />
+      </Show>
+
     </div>
     </>
   );

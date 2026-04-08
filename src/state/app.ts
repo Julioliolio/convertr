@@ -26,6 +26,10 @@ export interface AppState {
   codec: string;
   resultUrl: string | null;
   resultFilename: string | null;
+  uploadJobId: string | null;
+  uploadReady: boolean;
+  estimatedBytes: number | null;
+  estimating: boolean;
 }
 
 const [appState, setAppState] = createStore<AppState>({
@@ -43,6 +47,10 @@ const [appState, setAppState] = createStore<AppState>({
   codec: 'h264',
   resultUrl: null,
   resultFilename: null,
+  uploadJobId: null,
+  uploadReady: false,
+  estimatedBytes: null,
+  estimating: false,
 });
 
 // Slider values as separate signals for high-frequency updates

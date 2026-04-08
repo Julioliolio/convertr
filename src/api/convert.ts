@@ -7,11 +7,14 @@ export interface ConvertOptions {
   dither: string;
   codec: string;
   crf: number;
+  trimStart?: number;
+  trimEnd?: number;
 }
 
-export async function startConversion(): Promise<string | null> {
+export async function startConversion(trimStart?: number, trimEnd?: number): Promise<string | null> {
   const file = appState.selectedFile;
   const fileUrl = appState.fileUrl;
+  const uploadJobId = appState.uploadJobId;
   if (!file && !fileUrl) return null;
 
   // Width: 0 means original
@@ -20,7 +23,24 @@ export async function startConversion(): Promise<string | null> {
   try {
     let res: Response;
 
-    if (fileUrl) {
+    if (uploadJobId) {
+      // Pre-uploaded mode: file already on server from /upload or /fetch — skip re-upload
+      res = await fetch('/convert-fetched', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: uploadJobId,
+          outputFormat: appState.outputFormat,
+          fps: fps(),
+          width: w > 0 ? w : 'original',
+          dither: appState.dither,
+          crf: crf(),
+          codec: appState.codec,
+          trimStart,
+          trimEnd,
+        }),
+      });
+    } else if (fileUrl) {
       // URL mode: server already has the file from /fetch — call /convert-fetched
       const fetchJobId = appState.currentJobId;
       if (!fetchJobId) return null;
@@ -35,6 +55,8 @@ export async function startConversion(): Promise<string | null> {
           dither: appState.dither,
           crf: crf(),
           codec: appState.codec,
+          trimStart,
+          trimEnd,
         }),
       });
     } else {
@@ -47,6 +69,8 @@ export async function startConversion(): Promise<string | null> {
       form.append('codec', appState.codec);
       form.append('crf', String(crf()));
       if (w > 0) form.append('width', String(w));
+      if (trimStart != null) form.append('trimStart', String(trimStart));
+      if (trimEnd   != null) form.append('trimEnd',   String(trimEnd));
       res = await fetch('/convert', { method: 'POST', body: form });
     }
 
