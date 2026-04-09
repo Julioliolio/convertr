@@ -9,20 +9,20 @@ import { listenProgress } from '../../api/progress';
 import { uploadFile } from '../../api/upload';
 import { fetchEstimate, cancelEstimate } from '../../api/estimate';
 import { appState, setAppState, fps, width, vidWidth, crf } from '../../state/app';
-
-// ── Design tokens (exact from Paper) ──────────────────────────────────────────
-const ACCENT    = '#FC006D';
-const ACCENT_75 = 'rgba(252,0,109,0.75)';
-const BG        = '#F8F7F6';
-const MONO      = "'IBM Plex Mono', system-ui, monospace";
+import { ACCENT, ACCENT_75, BG, MONO } from '../../shared/tokens';
+import { PlayPauseIcon, XSvg, ArrowSvg, Chip, Cross, FormatButton, CHEVRON_1, CHEVRON_2, MINUS_1, MINUS_2 } from '../../shared/ui';
+import { fmtDuration, fmtBytes, extractFrames } from '../../shared/utils';
 
 // Server-supported formats (lowercase); AVIF not supported server-side
-const FORMATS = ['GIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
+const FORMATS = ['GIF', 'AVIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
 
 const pct = (v: number, of: number) => (v / of * 100).toFixed(4) + '%';
 
-// Top bar height: 24px top padding + 22px tallest button (XSvg) + 24px bottom padding
+// Space reserved above the video for the top bar (24px pad + 22px btn + 24px bottom margin).
 const TOP_BAR_H_PX = 70;
+// Closed height of the topBar element — just the button row with no bottom padding.
+// Items section sits below this; overflow:hidden clips them until the dropdown opens.
+const BTN_ROW_CLOSED_H = 46;
 
 // Space reserved for "VIDEO SETTINGS" label so it never clips off-screen.
 // Landscape: label sits below video → reserve vertical space (24px gap + 20px text).
@@ -71,7 +71,7 @@ function computeBox(vw: number, vh: number, videoW: number, videoH: number, cfg:
   const bottom = naturalBottom;
   const right  = left + boxW;
   const topBarTop        = naturalTop - topBarH;          // always padV + (availH-boxH)/2
-  const effectiveTopBarH = topBarH + extraTopPx;          // expands to include dropdown area
+  const effectiveTopBarH = BTN_ROW_CLOSED_H + extraTopPx;  // expands to include dropdown area
   const settingsTop  = isLandscape ? pct(bottom + 24, vh) : pct(top + 24, vh);
   const settingsLeft = isLandscape ? pct(left + 24, vw)  : pct(right + 24, vw);
   return {
@@ -83,249 +83,6 @@ function computeBox(vw: number, vh: number, videoW: number, videoH: number, cfg:
     settingsTop, settingsLeft,
   };
 }
-
-// ── SVG Icons (exact from Paper) ───────────────────────────────────────────────
-
-// Right-pointing chevron (used for GIF > and play button), 16 × 16
-// Chevron (∨) arm paths — derived from the two rect+transform pairs in the original ChevronSvg
-const CHEVRON_1 = "M47.405,46.646 L26.647,26.352 L30.798,22.294 L51.556,42.588 Z";
-const CHEVRON_2 = "M30.794,62.878 L51.552,42.584 L47.401,38.526 L26.643,58.820 Z";
-// Minus (—) targets: each arm flattens to the same horizontal bar
-const MINUS_1   = "M59.5,45.9 L19.5,45.9 L19.5,40.1 L59.5,40.1 Z";
-const MINUS_2   = "M19.5,45.9 L59.5,45.9 L59.5,40.1 L19.5,40.1 Z";
-
-// X button, 20 × 22
-const XSvg: Component<{ width?: number; height?: number }> = (p) => (
-  <svg
-    width={p.width ?? 20} height={p.height ?? 22}
-    viewBox="0 0 79 88" fill="none" xmlns="http://www.w3.org/2000/svg"
-    preserveAspectRatio="none"
-    style={{ width: `${p.width ?? 20}px`, height: `${p.height ?? 22}px`, 'flex-shrink': '0' }}
-  >
-    <rect width="78.198" height="87.165" fill="#FC006D" />
-    <rect width="55" height="6" transform="matrix(0.643 -0.766 -0.766 -0.643 23.721 66.577)" fill="#FFFFFF" />
-    <rect width="55" height="6" transform="matrix(-0.643 -0.766 -0.766 0.643 59.074 62.721)" fill="#FFFFFF" />
-  </svg>
-);
-
-// Right arrow (process / go), 20 × 22
-const ArrowSvg: Component<{ width?: number; height?: number }> = (p) => (
-  <svg
-    width={p.width ?? 20} height={p.height ?? 22}
-    viewBox="0 0 79 88" fill="none" xmlns="http://www.w3.org/2000/svg"
-    preserveAspectRatio="none"
-    style={{ width: `${p.width ?? 20}px`, height: `${p.height ?? 22}px`, 'flex-shrink': '0' }}
-  >
-    <rect x="0" width="78.198" height="87.165" fill="#FC006D" />
-    <path d="M64.984 43.583L43.739 64.796L39.49 60.553L53.481 46.582H0.009V40.582H53.481L39.49 26.613L43.739 22.37L64.984 43.583Z" fill="#FFFFFF" />
-  </svg>
-);
-
-// ── Sub-components (exact from Paper) ─────────────────────────────────────────
-
-// Chip: pink bg, cream text, IBM Plex Mono, text-base (16px/20px lh), no padding
-const Chip = (p: { children: any; size?: 'base' | 'xs' }) => (
-  <span style={{
-    display: 'inline-block', background: ACCENT, width: 'fit-content',
-    'font-family': MONO,
-    'font-size':   p.size === 'xs' ? '12px' : '16px',
-    'line-height': p.size === 'xs' ? '16px' : '20px',
-    color: BG, 'white-space': 'nowrap',
-  }}>
-    {p.children}
-  </span>
-);
-
-// Plus cross icon: 20 × 20, two 2px bars
-const Cross = () => (
-  <div style={{ position: 'relative', 'flex-shrink': '0', width: '20px', height: '20px' }}>
-    <div style={{ position: 'absolute', left: '9px', top: '0', width: '2px', height: '20px', background: ACCENT }} />
-    <div style={{ position: 'absolute', left: '0', top: '9px', width: '20px', height: '2px', background: ACCENT }} />
-  </div>
-);
-
-// Single button that morphs the chevron arrow into a minus when open
-const FormatButton: Component<{
-  format: string; open: boolean; onClick: () => void;
-  spring?: { dur: number; x1: number; y1: number; x2: number; y2: number };
-}> = (p) => {
-  let ref1!: SVGPathElement;
-  let ref2!: SVGPathElement;
-  let rafId = 0;
-  let initialized = false;
-
-  const nums  = (d: string) => d.match(/-?[\d.]+/g)!.map(Number);
-  const build = (n: number[]) =>
-    `M${n[0]},${n[1]} L${n[2]},${n[3]} L${n[4]},${n[5]} L${n[6]},${n[7]} Z`;
-  // Build a cubic-bezier approximation from the spring props for the rAF morph
-  const ease = (t: number) => {
-    const { x1 = 0.34, y1 = 1.56, x2 = 0.64, y2 = 1 } = p.spring ?? {};
-    // Simple cubic-bezier evaluation via de Casteljau (enough for small t steps)
-    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
-    const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
-    const solveCubic = (target: number) => {
-      let u = target;
-      for (let i = 0; i < 8; i++) {
-        const x = ((ax * u + bx) * u + cx) * u - target;
-        const dx = (3 * ax * u + 2 * bx) * u + cx;
-        if (Math.abs(dx) < 1e-6) break;
-        u -= x / dx;
-      }
-      return u;
-    };
-    if (t === 0) return 0;
-    if (t === 1) return 1;
-    const u = solveCubic(t);
-    return ((ay * u + by) * u + cy) * u;
-  };
-
-  const CN1 = nums(CHEVRON_1), CN2 = nums(CHEVRON_2);
-  const MN1 = nums(MINUS_1),   MN2 = nums(MINUS_2);
-
-  const animateTo = (to1: number[], to2: number[]) => {
-    cancelAnimationFrame(rafId);
-    const f1 = nums(ref1.getAttribute('d')!);
-    const f2 = nums(ref2.getAttribute('d')!);
-    const t0 = performance.now();
-    const durMs = (p.spring?.dur ?? 0.32) * 1000;
-    const tick = (now: number) => {
-      const t = ease(Math.min(1, (now - t0) / durMs));
-      ref1.setAttribute('d', build(f1.map((v, i) => v + (to1[i] - v) * t)));
-      ref2.setAttribute('d', build(f2.map((v, i) => v + (to2[i] - v) * t)));
-      if (t < 1) rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-  };
-
-  onCleanup(() => cancelAnimationFrame(rafId));
-
-  createEffect(() => {
-    const open = p.open;
-    if (!initialized) {
-      ref1.setAttribute('d', open ? MINUS_1 : CHEVRON_1);
-      ref2.setAttribute('d', open ? MINUS_2 : CHEVRON_2);
-      initialized = true;
-    } else {
-      animateTo(open ? MN1 : CN1, open ? MN2 : CN2);
-    }
-  });
-
-  return (
-    <div
-      style={{
-        position: 'relative',
-        display: 'inline-flex', 'align-items': 'center', gap: '3px',
-        padding: '2px',
-        cursor: 'pointer', 'user-select': 'none',
-      }}
-      onClick={p.onClick}
-    >
-      {/* Pink highlight that slides out from the icon rightward → leftward */}
-      <div style={{
-        position: 'absolute', inset: '0',
-        background: ACCENT,
-        transform: p.open ? 'scaleX(1)' : 'scaleX(0)',
-        'transform-origin': 'right',
-        transition: `transform ${(p.spring?.dur ?? 0.32) * 1000}ms cubic-bezier(${p.spring?.x1 ?? 0.34}, ${p.spring?.y1 ?? 1.56}, ${p.spring?.x2 ?? 0.64}, ${p.spring?.y2 ?? 1})`,
-        'pointer-events': 'none',
-      }} />
-      <span style={{
-        position: 'relative', 'z-index': '1',
-        color: p.open ? BG : ACCENT,
-        'font-family': MONO, 'font-size': '16px', 'line-height': '16px',
-        'flex-shrink': '0',
-        transition: 'color 200ms ease-in-out',
-      }}>
-        {p.format}
-      </span>
-      <svg
-        width={16} height={16}
-        viewBox="0 0 79 86" fill="none" preserveAspectRatio="none"
-        style={{ position: 'relative', 'z-index': '1', width: '16px', height: '16px', 'flex-shrink': '0' }}
-      >
-        {/* No background rect — the overlay behind handles the full highlight as one block */}
-        <path ref={ref1!} fill={p.open ? 'white' : ACCENT} style={{ transition: `fill ${(p.spring?.dur ?? 0.32) * 1000}ms ease-in-out` }} />
-        <path ref={ref2!} fill={p.open ? 'white' : ACCENT} style={{ transition: `fill ${(p.spring?.dur ?? 0.32) * 1000}ms ease-in-out` }} />
-      </svg>
-    </div>
-  );
-};
-
-
-// ── PlayPause icon (morphing play ↔ pause via rAF) ────────────────────────────
-const PLAY_1  = "M47.405,46.646 L26.634,26.350 L30.787,22.292 L51.558,42.588 Z";
-const PLAY_2  = "M30.794,62.878 L51.565,42.582 L47.411,38.524 L26.641,58.820 Z";
-const PAUSE_1 = "M27.294,62.272 L27.294,22.904 L33.099,22.904 L33.099,62.272 Z";
-const PAUSE_2 = "M50.904,62.272 L50.904,22.904 L45.099,22.904 L45.099,62.272 Z";
-
-const PlayPauseIcon: Component<{ playing: boolean; width?: number; height?: number }> = (p) => {
-  let ref1!: SVGPathElement;
-  let ref2!: SVGPathElement;
-  let rafId = 0;
-  let initialized = false;
-
-  const nums  = (d: string) => d.match(/-?[\d.]+/g)!.map(Number);
-  const build = (n: number[]) =>
-    `M${n[0]},${n[1]} L${n[2]},${n[3]} L${n[4]},${n[5]} L${n[6]},${n[7]} Z`;
-  const ease  = (t: number) => t < 0.5 ? 2*t*t : -1 + (4 - 2*t)*t;
-
-  const PN1 = nums(PLAY_1),  PN2 = nums(PLAY_2);
-  const AN1 = nums(PAUSE_1), AN2 = nums(PAUSE_2);
-
-  const animateTo = (to1: number[], to2: number[]) => {
-    cancelAnimationFrame(rafId);
-    const f1 = nums(ref1.getAttribute('d')!);
-    const f2 = nums(ref2.getAttribute('d')!);
-    const t0 = performance.now();
-    const tick = (now: number) => {
-      const t = ease(Math.min(1, (now - t0) / 180));
-      ref1.setAttribute('d', build(f1.map((v, i) => v + (to1[i] - v) * t)));
-      ref2.setAttribute('d', build(f2.map((v, i) => v + (to2[i] - v) * t)));
-      if (t < 1) rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-  };
-
-  onCleanup(() => cancelAnimationFrame(rafId));
-
-  createEffect(() => {
-    const playing = p.playing;
-    if (!initialized) {
-      ref1.setAttribute('d', playing ? PAUSE_1 : PLAY_1);
-      ref2.setAttribute('d', playing ? PAUSE_2 : PLAY_2);
-      initialized = true;
-    } else {
-      animateTo(playing ? AN1 : PN1, playing ? AN2 : PN2);
-    }
-  });
-
-  return (
-    <svg
-      width={p.width ?? 16} height={p.height ?? 16}
-      viewBox="0 0 79 86" fill="none" preserveAspectRatio="none"
-      style={{ width: `${p.width ?? 16}px`, height: `${p.height ?? 16}px`, 'flex-shrink': '0' }}
-    >
-      <rect width="78.1985" height="85.1755" fill="#FC036D" />
-      <path ref={ref1!} fill="white" stroke="white" stroke-width="2" />
-      <path ref={ref2!} fill="white" stroke="white" stroke-width="2" />
-    </svg>
-  );
-};
-
-const fmtDuration = (s: number) => `${Math.round(s)}s`;
-
-const extractFrames = (src: string, duration: number, count: number): Promise<string[]> =>
-  new Promise((resolve) => {
-    const vid = document.createElement('video');
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
-    vid.src = src; vid.muted = true; vid.preload = 'auto';
-    const results: string[] = [];
-    let idx = 0; let thumbW = 24;
-    const seekNext = () => { if (idx >= count) { resolve(results); return; } vid.currentTime = (idx / count) * duration + 0.01; };
-    vid.addEventListener('seeked', () => { ctx.drawImage(vid, 0, 0, thumbW, 24); results.push(canvas.toDataURL('image/jpeg', 0.8)); idx++; seekNext(); });
-    vid.addEventListener('loadedmetadata', () => { thumbW = Math.round(24 * vid.videoWidth / vid.videoHeight); canvas.width = thumbW; canvas.height = 24; seekNext(); });
-  });
 
 // ── Component ──────────────────────────────────────────────────────────────────
 const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) => {
@@ -361,12 +118,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const trimmedDuration = () => trimEnd() - trimStart();
 
   // ── Estimated output size ─────────────────────────────────────────────────────
-  const fmtBytes = (bytes: number) => {
-    const mb = bytes / 1_048_576;
-    if (mb < 0.1) return '<0.1 MB';
-    if (mb < 10)  return mb.toFixed(1) + ' MB';
-    return Math.round(mb) + ' MB';
-  };
 
   // Analytical fallback (instant, shown while waiting for server estimate)
   const analyticalSize = () => {
@@ -516,11 +267,11 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       dur: [0.3, 0.05, 3.0, 0.05],
     },
     highlight: {
-      dur: [0.32, 0.05, 2.0,  0.01],
-      x1:  [0.34, 0.0,  1.0,  0.01],
-      y1:  [1.56, -2.0, 3.0,  0.01],
-      x2:  [0.64, 0.0,  1.0,  0.01],
-      y2:  [1.0,  -2.0, 3.0,  0.01],
+      dur: [0.15, 0.05, 2.0,  0.01],
+      x1:  [0.15, 0.0,  1.0,  0.01],
+      y1:  [1.01, -2.0, 3.0,  0.01],
+      x2:  [0.35, 0.0,  1.0,  0.01],
+      y2:  [1.00, -2.0, 3.0,  0.01],
     },
     enter:            { type: 'action' as const },
     exit:             { type: 'action' as const },
@@ -665,7 +416,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     let extraTopPx = 0;
     if (isOpen) {
       const nItems = FORMATS.length - 1;
-      extraTopPx = 1 + nItems * 20 + Math.max(0, nItems - 1) + 24;
+      extraTopPx = 4 + nItems * 20 + (nItems - 1) * 4;
     }
     setBox(computeBox(vw, vh, props.video.width, props.video.height, l, extraTopPx));
   });
@@ -950,7 +701,8 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         <div style={{
           display: 'flex', 'align-items': 'center', 'justify-content': 'space-between',
           'padding-inline': '24px',
-          'padding-block': '24px',
+          'padding-top': '24px',
+          'padding-bottom': '0px',
           'box-sizing': 'border-box',
           'flex-shrink': '0',
         }}>
@@ -958,17 +710,17 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
             format={displayFormat()} open={fmtOpen()} onClick={() => setFmtOpen(o => !o)}
             spring={{ dur: anim().highlight.dur, x1: anim().highlight.x1, y1: anim().highlight.y1, x2: anim().highlight.x2, y2: anim().highlight.y2 }}
           />
-          <div style={{ cursor: 'pointer' }} onClick={triggerExit}>
+          <div style={{ cursor: 'pointer', display: 'flex' }} onClick={triggerExit}>
             <XSvg width={20} height={22} />
           </div>
         </div>
         {/* ── Format items: always in DOM, revealed by overflow:hidden as height grows ── */}
         <div style={{
           'padding-inline': '24px',
-          'padding-bottom': '24px',
+          'padding-top': '4px',
+          'padding-bottom': '0px',
           display: 'flex', 'flex-direction': 'column',
-          gap: '1px',
-          'margin-top': '1px',
+          gap: '4px',
           'pointer-events': fmtOpen() ? 'auto' : 'none',
         }}>
           <For each={FORMATS.filter(f => f !== format())}>

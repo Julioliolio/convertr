@@ -22,9 +22,7 @@ function computeIdlePos(vw: number, vh: number) {
   };
 }
 
-const ACCENT    = '#FC006D';
-const ACCENT_75 = 'rgba(252,0,109,0.75)';
-const BG        = '#F8F7F6';
+import { ACCENT, ACCENT_75, BG } from '../../shared/tokens';
 
 type Phase = 'splash' | 'contracting' | 'idle';
 

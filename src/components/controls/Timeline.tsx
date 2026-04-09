@@ -1,6 +1,7 @@
-import { Component, For, onCleanup } from 'solid-js';
+import { Component, For, createSignal, onMount, onCleanup } from 'solid-js';
+import { ACCENT } from '../../shared/tokens';
 
-const ACCENT = '#FC006D';
+const TRIM_HANDLE_TICK = '#F2F4F9';
 
 const CROSS_GAP     = 24; // px gap between cross and trim handle (default, unclamped)
 const CROSS_W       = 20; // px width of the cross icon
@@ -55,15 +56,25 @@ export interface TimelineProps {
 
 const Timeline: Component<TimelineProps> = (props) => {
   let trackRef!: HTMLDivElement;
+  const [trackWidth, setTrackWidth] = createSignal(0);
+
+  onMount(() => {
+    if (!trackRef) return;
+    setTrackWidth(trackRef.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) setTrackWidth(entry.contentRect.width);
+    });
+    observer.observe(trackRef);
+    onCleanup(() => observer.disconnect());
+  });
 
   const leftPct  = () => `${(props.trimStart / props.duration) * 100}%`;
   const headLeft = () => `${(props.currentTime / props.duration) * 100}%`;
 
-  const trimStartPx    = () => trackRef ? (props.trimStart / props.duration) * trackRef.getBoundingClientRect().width : 0;
-  const trimEndPx      = () => trackRef ? (props.trimEnd   / props.duration) * trackRef.getBoundingClientRect().width : 0;
-  const trackW         = () => trackRef ? trackRef.getBoundingClientRect().width : 0;
+  const trimStartPx    = () => (props.trimStart / props.duration) * trackWidth();
+  const trimEndPx      = () => (props.trimEnd   / props.duration) * trackWidth();
   const showLeftCross  = () => trimStartPx() >= CROSS_HIDE_PX;
-  const showRightCross = () => trackW() - trimEndPx() >= CROSS_HIDE_PX;
+  const showRightCross = () => trackWidth() - trimEndPx() >= CROSS_HIDE_PX;
 
   // Clicking / dragging anywhere on the track scrubs the playhead
   const onTrackMouseDown = (e: MouseEvent) => {
@@ -238,7 +249,7 @@ const Timeline: Component<TimelineProps> = (props) => {
           onMouseDown={dragHandle('start')}
         >
           <div style={{ position: 'absolute', left: '0', top: '0', width: '6px', height: '100%', background: ACCENT }} />
-          <div style={{ position: 'absolute', left: '2px', top: '7px', width: '2px', height: '10px', background: '#F2F4F9', 'pointer-events': 'none' }} />
+          <div style={{ position: 'absolute', left: '2px', top: '7px', width: '2px', height: '10px', background: TRIM_HANDLE_TICK, 'pointer-events': 'none' }} />
         </div>
 
         {/* Right trim handle — 22px hit area extends leftward into the selection */}
@@ -247,7 +258,7 @@ const Timeline: Component<TimelineProps> = (props) => {
           onMouseDown={dragHandle('end')}
         >
           <div style={{ position: 'absolute', right: '0', top: '0', width: '6px', height: '100%', background: ACCENT }} />
-          <div style={{ position: 'absolute', right: '2px', top: '7px', width: '2px', height: '10px', background: '#F2F4F9', 'pointer-events': 'none' }} />
+          <div style={{ position: 'absolute', right: '2px', top: '7px', width: '2px', height: '10px', background: TRIM_HANDLE_TICK, 'pointer-events': 'none' }} />
         </div>
 
         {/* Trim region border — only outlines the active selection */}

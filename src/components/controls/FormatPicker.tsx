@@ -1,4 +1,4 @@
-import { Component, For, createSignal, onCleanup, type Accessor } from 'solid-js';
+import { Component, For, createSignal, onMount, onCleanup, type Accessor } from 'solid-js';
 import { ANIM } from '../../engine/config';
 
 interface PickerOption {
@@ -22,7 +22,9 @@ const FormatPicker: Component<FormatPickerProps> = (props) => {
     }
   };
 
-  document.addEventListener('click', handleClickOutside);
+  onMount(() => {
+    document.addEventListener('click', handleClickOutside);
+  });
   onCleanup(() => document.removeEventListener('click', handleClickOutside));
 
   return (
