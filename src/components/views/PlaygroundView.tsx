@@ -144,12 +144,12 @@ const PlaygroundView: Component = () => {
   let isDraggingHandle = false;
   const [dragging,       setDragging]       = createSignal(false);
   const [orientation,    setOrientation]    = createSignal<'landscape' | 'portrait'>('landscape');
-  const [videoSrc,       setVideoSrc]       = createSignal<string | null>(null);
+  const [videoSrc,       setVideoSrc]       = createSignal<string | null>('/dev-mock.mp4');
   const box = () => ORIENTATIONS[orientation()];
 
   const loadFile = (file: File) => {
     const prev = videoSrc();
-    if (prev) URL.revokeObjectURL(prev);
+    if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
     setVideoSrc(URL.createObjectURL(file));
   };
 
@@ -203,8 +203,7 @@ const PlaygroundView: Component = () => {
       setDuration(d);
       setTrimStart(0);
       setTrimEnd(d);
-      const src = videoSrc() ?? '/dev-mock.mp4';
-      extractFrames(src, d, 20).then(setFrames);
+      extractFrames(videoSrc()!, d, 20).then(setFrames);
     });
 
     // Track playhead + confine playback to trim region

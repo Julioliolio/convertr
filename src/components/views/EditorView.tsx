@@ -87,18 +87,12 @@ function computeBox(vw: number, vh: number, videoW: number, videoH: number, cfg:
 // ── SVG Icons (exact from Paper) ───────────────────────────────────────────────
 
 // Right-pointing chevron (used for GIF > and play button), 16 × 16
-const ChevronSvg: Component<{ width?: number; height?: number }> = (p) => (
-  <svg
-    width={p.width ?? 16} height={p.height ?? 16}
-    viewBox="0 0 79 86" fill="none" xmlns="http://www.w3.org/2000/svg"
-    preserveAspectRatio="none"
-    style={{ width: `${p.width ?? 16}px`, height: `${p.height ?? 16}px`, 'flex-shrink': '0' }}
-  >
-    <rect width="78.198" height="85.175" fill="#FC036D" />
-    <rect width="29.032" height="5.806" transform="matrix(-0.715 -0.699 0.715 -0.699 47.405 46.646)" fill="#F8F7F6" />
-    <rect width="29.032" height="5.806" transform="matrix(0.715 -0.699 -0.715 -0.699 30.794 62.878)" fill="#F8F7F6" />
-  </svg>
-);
+// Chevron (∨) arm paths — derived from the two rect+transform pairs in the original ChevronSvg
+const CHEVRON_1 = "M47.405,46.646 L26.647,26.352 L30.798,22.294 L51.556,42.588 Z";
+const CHEVRON_2 = "M30.794,62.878 L51.552,42.584 L47.401,38.526 L26.643,58.820 Z";
+// Minus (—) targets: each arm flattens to the same horizontal bar
+const MINUS_1   = "M59.5,45.9 L19.5,45.9 L19.5,40.1 L59.5,40.1 Z";
+const MINUS_2   = "M19.5,45.9 L59.5,45.9 L59.5,40.1 L19.5,40.1 Z";
 
 // X button, 20 × 22
 const XSvg: Component<{ width?: number; height?: number }> = (p) => (
@@ -150,48 +144,112 @@ const Cross = () => (
   </div>
 );
 
-const FormatButtonClosed: Component<{ format: string; onClick: () => void }> = (p) => (
-  <div
-    style={{ display: 'flex', 'align-items': 'center', gap: '4px', cursor: 'pointer', 'user-select': 'none' }}
-    onClick={p.onClick}
-  >
-    <span style={{ color: ACCENT, 'font-family': MONO, 'font-size': '16px', 'line-height': '20px', 'flex-shrink': '0' }}>
-      {p.format}
-    </span>
-    <ChevronSvg width={16} height={16} />
-  </div>
-);
+// Single button that morphs the chevron arrow into a minus when open
+const FormatButton: Component<{
+  format: string; open: boolean; onClick: () => void;
+  spring?: { dur: number; x1: number; y1: number; x2: number; y2: number };
+}> = (p) => {
+  let ref1!: SVGPathElement;
+  let ref2!: SVGPathElement;
+  let rafId = 0;
+  let initialized = false;
 
-const FormatButtonOpen: Component<{ format: string; onClick: () => void }> = (p) => (
-  <div
-    style={{ display: 'flex', 'align-items': 'center', cursor: 'pointer', 'user-select': 'none' }}
-    onClick={p.onClick}
-  >
-    {/* "GIF" text with absolute pink bg block behind it */}
-    <div style={{ position: 'relative', padding: '0 2px' }}>
-      <div style={{ position: 'absolute', left: '0', top: '2px', width: '33px', height: '16px', background: ACCENT }} />
-      <span style={{ position: 'relative', color: BG, 'font-family': MONO, 'font-size': '16px', 'line-height': '20px', 'flex-shrink': '0' }}>
+  const nums  = (d: string) => d.match(/-?[\d.]+/g)!.map(Number);
+  const build = (n: number[]) =>
+    `M${n[0]},${n[1]} L${n[2]},${n[3]} L${n[4]},${n[5]} L${n[6]},${n[7]} Z`;
+  // Build a cubic-bezier approximation from the spring props for the rAF morph
+  const ease = (t: number) => {
+    const { x1 = 0.34, y1 = 1.56, x2 = 0.64, y2 = 1 } = p.spring ?? {};
+    // Simple cubic-bezier evaluation via de Casteljau (enough for small t steps)
+    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+    const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+    const solveCubic = (target: number) => {
+      let u = target;
+      for (let i = 0; i < 8; i++) {
+        const x = ((ax * u + bx) * u + cx) * u - target;
+        const dx = (3 * ax * u + 2 * bx) * u + cx;
+        if (Math.abs(dx) < 1e-6) break;
+        u -= x / dx;
+      }
+      return u;
+    };
+    if (t === 0) return 0;
+    if (t === 1) return 1;
+    const u = solveCubic(t);
+    return ((ay * u + by) * u + cy) * u;
+  };
+
+  const CN1 = nums(CHEVRON_1), CN2 = nums(CHEVRON_2);
+  const MN1 = nums(MINUS_1),   MN2 = nums(MINUS_2);
+
+  const animateTo = (to1: number[], to2: number[]) => {
+    cancelAnimationFrame(rafId);
+    const f1 = nums(ref1.getAttribute('d')!);
+    const f2 = nums(ref2.getAttribute('d')!);
+    const t0 = performance.now();
+    const durMs = (p.spring?.dur ?? 0.32) * 1000;
+    const tick = (now: number) => {
+      const t = ease(Math.min(1, (now - t0) / durMs));
+      ref1.setAttribute('d', build(f1.map((v, i) => v + (to1[i] - v) * t)));
+      ref2.setAttribute('d', build(f2.map((v, i) => v + (to2[i] - v) * t)));
+      if (t < 1) rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+  };
+
+  onCleanup(() => cancelAnimationFrame(rafId));
+
+  createEffect(() => {
+    const open = p.open;
+    if (!initialized) {
+      ref1.setAttribute('d', open ? MINUS_1 : CHEVRON_1);
+      ref2.setAttribute('d', open ? MINUS_2 : CHEVRON_2);
+      initialized = true;
+    } else {
+      animateTo(open ? MN1 : CN1, open ? MN2 : CN2);
+    }
+  });
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        display: 'inline-flex', 'align-items': 'center', gap: '3px',
+        padding: '2px',
+        cursor: 'pointer', 'user-select': 'none',
+      }}
+      onClick={p.onClick}
+    >
+      {/* Pink highlight that slides out from the icon rightward → leftward */}
+      <div style={{
+        position: 'absolute', inset: '0',
+        background: ACCENT,
+        transform: p.open ? 'scaleX(1)' : 'scaleX(0)',
+        'transform-origin': 'right',
+        transition: `transform ${(p.spring?.dur ?? 0.32) * 1000}ms cubic-bezier(${p.spring?.x1 ?? 0.34}, ${p.spring?.y1 ?? 1.56}, ${p.spring?.x2 ?? 0.64}, ${p.spring?.y2 ?? 1})`,
+        'pointer-events': 'none',
+      }} />
+      <span style={{
+        position: 'relative', 'z-index': '1',
+        color: p.open ? BG : ACCENT,
+        'font-family': MONO, 'font-size': '16px', 'line-height': '16px',
+        'flex-shrink': '0',
+        transition: 'color 200ms ease-in-out',
+      }}>
         {p.format}
       </span>
+      <svg
+        width={16} height={16}
+        viewBox="0 0 79 86" fill="none" preserveAspectRatio="none"
+        style={{ position: 'relative', 'z-index': '1', width: '16px', height: '16px', 'flex-shrink': '0' }}
+      >
+        {/* No background rect — the overlay behind handles the full highlight as one block */}
+        <path ref={ref1!} fill={p.open ? 'white' : ACCENT} style={{ transition: `fill ${(p.spring?.dur ?? 0.32) * 1000}ms ease-in-out` }} />
+        <path ref={ref2!} fill={p.open ? 'white' : ACCENT} style={{ transition: `fill ${(p.spring?.dur ?? 0.32) * 1000}ms ease-in-out` }} />
+      </svg>
     </div>
-    {/* Dash / open indicator: pink bg box with white horizontal line */}
-    <div style={{
-      background: ACCENT, 'padding-inline': '3px', 'padding-block': '4px',
-      display: 'flex', 'align-items': 'center', 'justify-content': 'center',
-    }}>
-      <div style={{ width: '7.97px', height: '8px', position: 'relative', 'flex-shrink': '0' }}>
-        <div style={{
-          position: 'absolute',
-          left: 'calc(50% - 0.015px)', top: '50%',
-          width: '1.5px', height: '5.9px',
-          background: BG,
-          'transform-origin': 'top left',
-          transform: 'translate(-50%, -50%) rotate(90deg)',
-        }} />
-      </div>
-    </div>
-  </div>
-);
+  );
+};
 
 
 // ── PlayPause icon (morphing play ↔ pause via rAF) ────────────────────────────
@@ -457,6 +515,13 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     dropdown: {
       dur: [0.3, 0.05, 3.0, 0.05],
     },
+    highlight: {
+      dur: [0.32, 0.05, 2.0,  0.01],
+      x1:  [0.34, 0.0,  1.0,  0.01],
+      y1:  [1.56, -2.0, 3.0,  0.01],
+      x2:  [0.64, 0.0,  1.0,  0.01],
+      y2:  [1.0,  -2.0, 3.0,  0.01],
+    },
     enter:            { type: 'action' as const },
     exit:             { type: 'action' as const },
     open_dropdown:    { type: 'action' as const },
@@ -473,8 +538,30 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   // ── State ────────────────────────────────────────────────────────────────────
   const [box,           setBox]           = createSignal<BoxResult | null>(null);
   const [vp,            setVp]            = createSignal({ vw: 0, vh: 0 });
-  const [fmtOpen,       setFmtOpen]       = createSignal(false);
-  const [format,        setFormat]        = createSignal(FORMATS[0]);
+  const [fmtOpen,         setFmtOpen]         = createSignal(false);
+  const [format,          setFormat]          = createSignal(FORMATS[0]);
+  const [displayFormat,   setDisplayFormat]   = createSignal(FORMATS[0]);
+
+  // ── Format scramble animation ─────────────────────────────────────────────────
+  const FORMAT_SCRAMBLE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let formatScrambleTimer: ReturnType<typeof setTimeout> | null = null;
+  const scrambleFormat = (target: string) => {
+    if (formatScrambleTimer != null) clearTimeout(formatScrambleTimer);
+    const totalFrames = 14;
+    const frameMs = 35;
+    let frame = 0;
+    const tick = () => {
+      frame++;
+      if (frame >= totalFrames) { setDisplayFormat(target); return; }
+      const resolved = Math.floor((frame / totalFrames) * target.length);
+      const scrambled = target.split('').map((ch, i) =>
+        i < resolved ? ch : FORMAT_SCRAMBLE_CHARS[Math.floor(Math.random() * FORMAT_SCRAMBLE_CHARS.length)]
+      ).join('');
+      setDisplayFormat(scrambled);
+      formatScrambleTimer = setTimeout(tick, frameMs);
+    };
+    tick();
+  };
 
   // Keep appState.outputFormat in sync with local format picker
   createEffect(() => {
@@ -734,6 +821,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       ro.disconnect();
       cancelAnimationFrame(rafId);
       cancelAnimationFrame(scrambleRaf);
+      if (formatScrambleTimer != null) clearTimeout(formatScrambleTimer);
       document.removeEventListener('keydown', onKeyDown);
     });
   });
@@ -866,11 +954,10 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
           'box-sizing': 'border-box',
           'flex-shrink': '0',
         }}>
-          <Show when={fmtOpen()} fallback={
-            <FormatButtonClosed format={format()} onClick={() => setFmtOpen(true)} />
-          }>
-            <FormatButtonOpen format={format()} onClick={() => setFmtOpen(false)} />
-          </Show>
+          <FormatButton
+            format={displayFormat()} open={fmtOpen()} onClick={() => setFmtOpen(o => !o)}
+            spring={{ dur: anim().highlight.dur, x1: anim().highlight.x1, y1: anim().highlight.y1, x2: anim().highlight.x2, y2: anim().highlight.y2 }}
+          />
           <div style={{ cursor: 'pointer' }} onClick={triggerExit}>
             <XSvg width={20} height={22} />
           </div>
@@ -888,7 +975,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
             {(fmt) => (
               <div
                 style={{ 'font-family': MONO, 'font-size': '16px', 'line-height': '20px', color: ACCENT, cursor: 'pointer', 'user-select': 'none' }}
-                onClick={() => { setFormat(fmt); setFmtOpen(false); }}
+                onClick={() => { setFormat(fmt); scrambleFormat(fmt); setFmtOpen(false); }}
               >
                 {fmt}
               </div>
