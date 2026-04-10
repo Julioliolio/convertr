@@ -267,11 +267,11 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       dur: [0.3, 0.05, 3.0, 0.05],
     },
     highlight: {
-      dur: [0.15, 0.05, 2.0,  0.01],
-      x1:  [0.15, 0.0,  1.0,  0.01],
-      y1:  [1.01, -2.0, 3.0,  0.01],
-      x2:  [0.35, 0.0,  1.0,  0.01],
-      y2:  [1.00, -2.0, 3.0,  0.01],
+      dur: [0.200, 0.05, 2.0,  0.01],
+      x1:  [0.006, 0.0,  1.0,  0.01],
+      y1:  [0.984, -2.0, 3.0,  0.01],
+      x2:  [0.000, 0.0,  1.0,  0.01],
+      y2:  [1.109, -2.0, 3.0,  0.01],
     },
     enter:            { type: 'action' as const },
     exit:             { type: 'action' as const },
@@ -708,7 +708,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         }}>
           <FormatButton
             format={displayFormat()} open={fmtOpen()} onClick={() => setFmtOpen(o => !o)}
-            spring={{ dur: anim().highlight.dur, x1: anim().highlight.x1, y1: anim().highlight.y1, x2: anim().highlight.x2, y2: anim().highlight.y2 }}
+            spring={{ dur: 0.200, x1: 0.006, y1: 0.984, x2: 0.000, y2: 1.109 }}
           />
           <div style={{ cursor: 'pointer', display: 'flex' }} onClick={triggerExit}>
             <XSvg width={20} height={22} />

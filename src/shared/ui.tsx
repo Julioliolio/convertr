@@ -181,9 +181,9 @@ export const FormatButton: Component<{
       onClick={p.onClick}
     >
       <div style={{
-        position: 'absolute', inset: '0',
+        position: 'absolute', top: '0', right: '0', bottom: '0', left: '-20px',
         background: ACCENT,
-        'clip-path': p.open ? 'inset(0 0 0 0%)' : 'inset(0 0 0 calc(100% - 18px))',
+        'clip-path': p.open ? 'inset(0 0 0 20px)' : 'inset(0 0 0 calc(100% - 18px))',
         transition: `clip-path ${(p.spring?.dur ?? 0.15) * 1000}ms cubic-bezier(${p.spring?.x1 ?? 0.15}, ${p.spring?.y1 ?? 1.01}, ${p.spring?.x2 ?? 0.35}, ${p.spring?.y2 ?? 1})`,
         'pointer-events': 'none',
       }} />
