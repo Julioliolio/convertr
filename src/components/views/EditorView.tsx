@@ -1,5 +1,4 @@
 import { Component, createEffect, createSignal, onCleanup, onMount, For, Show, untrack } from 'solid-js';
-import { createDialKit } from 'dialkit/solid';
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import Timeline from '../controls/Timeline';
@@ -243,48 +242,17 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     }
   };
 
-  // ── Dials ────────────────────────────────────────────────────────────────────
-  const layout = createDialKit('Layout', {
-    PAD_H: [0.04, 0.005, 0.20, 0.005],
-    PAD_V: [0.05, 0.01,  0.20, 0.005],
-  });
+  // ── Static config ────────────────────────────────────────────────────────────
+  const layout: LayoutCfg = { PAD_H: 0.04, PAD_V: 0.05 };
 
-  const anim = createDialKit('Animation', {
-    timing: {
-      p1_dur:     [0.35, 0.05, 3.0, 0.05],
-      p2_dur:     [0.35, 0.05, 3.0, 0.05],
-      p2_delay:   [0.35, 0.0,  2.0, 0.05],
-      fade_dur:   [0.25, 0.05, 2.0, 0.05],
-      fade_delay: [0.55, 0.0,  2.0, 0.05],
-    },
-    easing: {
-      x1: [1.0,   0.0,  1.0, 0.01],
-      y1: [-0.35, -1.0, 2.0, 0.01],
-      x2: [0.22,  0.0,  1.0, 0.01],
-      y2: [1.15,  -1.0, 2.0, 0.01],
-    },
-    dropdown: {
-      dur: [0.3, 0.05, 3.0, 0.05],
-    },
-    highlight: {
-      dur: [0.200, 0.05, 2.0,  0.01],
-      x1:  [0.006, 0.0,  1.0,  0.01],
-      y1:  [0.984, -2.0, 3.0,  0.01],
-      x2:  [0.000, 0.0,  1.0,  0.01],
-      y2:  [1.109, -2.0, 3.0,  0.01],
-    },
-    enter:            { type: 'action' as const },
-    exit:             { type: 'action' as const },
-    open_dropdown:    { type: 'action' as const },
-    close_dropdown:   { type: 'action' as const },
-  }, {
-    onAction: (path) => {
-      if (path === 'enter')           triggerEnter();
-      if (path === 'exit')            triggerExit();
-      if (path === 'open_dropdown')   setFmtOpen(true);
-      if (path === 'close_dropdown')  setFmtOpen(false);
-    },
-  });
+  const anim = {
+    timing: { p1_dur: 0.35, p2_dur: 0.35, p2_delay: 0.35, fade_dur: 0.25, fade_delay: 0.55 },
+    easing: { x1: 1.0, y1: -0.35, x2: 0.22, y2: 1.15 },
+    dropdown: { dur: 0.3 },
+    highlight: { dur: 0.200, x1: 0.006, y1: 0.984, x2: 0.000, y2: 1.109 },
+  };
+
+  const EASE_STR = `cubic-bezier(${anim.easing.x1},${anim.easing.y1},${anim.easing.x2},${anim.easing.y2})`;
 
   // ── State ────────────────────────────────────────────────────────────────────
   const [box,           setBox]           = createSignal<BoxResult | null>(null);
@@ -295,13 +263,16 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
 
   // ── Format scramble animation ─────────────────────────────────────────────────
   const FORMAT_SCRAMBLE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let formatScrambleTimer: ReturnType<typeof setTimeout> | null = null;
+  let formatScrambleRaf = 0;
   const scrambleFormat = (target: string) => {
-    if (formatScrambleTimer != null) clearTimeout(formatScrambleTimer);
+    cancelAnimationFrame(formatScrambleRaf);
     const totalFrames = 14;
     const frameMs = 35;
     let frame = 0;
-    const tick = () => {
+    let last = performance.now();
+    const tick = (now: number) => {
+      if (now - last < frameMs) { formatScrambleRaf = requestAnimationFrame(tick); return; }
+      last = now;
       frame++;
       if (frame >= totalFrames) { setDisplayFormat(target); return; }
       const resolved = Math.floor((frame / totalFrames) * target.length);
@@ -309,9 +280,9 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         i < resolved ? ch : FORMAT_SCRAMBLE_CHARS[Math.floor(Math.random() * FORMAT_SCRAMBLE_CHARS.length)]
       ).join('');
       setDisplayFormat(scrambled);
-      formatScrambleTimer = setTimeout(tick, frameMs);
+      formatScrambleRaf = requestAnimationFrame(tick);
     };
-    tick();
+    formatScrambleRaf = requestAnimationFrame(tick);
   };
 
   // Keep appState.outputFormat in sync with local format picker
@@ -343,24 +314,18 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const snapToIdle = () => {
     const vw = containerRef.offsetWidth; const vh = containerRef.offsetHeight;
     const { x1, y1, x2, y2 } = calculateBBoxTargets(vw, vh, null, 'idle');
-    const gl = pct(x1, vw); const gr = pct(x2, vw);
-    const gt = pct(y1, vh); const gb = pct(y2, vh);
-    vLineL.style.left = gl; vLineR.style.left = gr;
-    hLineT.style.top  = gt; hLineB.style.top  = gb;
-    crossTL.style.top = `calc(${gt} - 10px)`; crossTL.style.left = `calc(${gl} - 10px)`;
-    crossTR.style.top = `calc(${gt} - 10px)`; crossTR.style.left = `calc(${gr} - 10px)`;
-    crossBL.style.top = `calc(${gb} - 10px)`; crossBL.style.left = `calc(${gl} - 10px)`;
-    crossBR.style.top = `calc(${gb} - 10px)`; crossBR.style.left = `calc(${gr} - 10px)`;
-    bboxEl.style.left = gl; bboxEl.style.top = gt;
-    bboxEl.style.width = `calc(${gr} - ${gl})`; bboxEl.style.height = `calc(${gb} - ${gt})`;
-    topBarEl.style.left = gl; topBarEl.style.width = `calc(${gr} - ${gl})`;
-    topBarEl.style.top = gt;
+    const gl = pct(x1, vw), gr = pct(x2, vw), gt = pct(y1, vh), gb = pct(y2, vh);
+    applyBox({
+      left: x1, top: y1, right: x2, bottom: y2, isLandscape: true,
+      gl, gr, gt, gb,
+      topBarTopPct: gt, topBarHPct: '0%',
+      settingsTop: gt, settingsLeft: gl,
+    });
   };
 
   // ── Transitions ───────────────────────────────────────────────────────────────
-  const buildTr = (a: ReturnType<typeof anim>, landscape: boolean, dropdownDur?: number): TransitionSet => {
-    const { x1, y1, x2, y2 } = a.easing;
-    const ease = `cubic-bezier(${x1},${y1},${x2},${y2})`;
+  const buildTr = (a: typeof anim, landscape: boolean, dropdownDur?: number): TransitionSet => {
+    const ease = EASE_STR;
     if (dropdownDur != null) {
       const Dd = `${dropdownDur}s ${ease}`;
       return {
@@ -401,14 +366,14 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const isLandscape = props.video.width >= props.video.height;
   let prevFmtOpen = false;
   createEffect(() => {
-    const a = anim(); const isOpen = fmtOpen();
+    const a = anim; const isOpen = fmtOpen();
     const changed = isOpen !== prevFmtOpen;
     prevFmtOpen = isOpen;
     applyTr(buildTr(a, isLandscape, changed ? a.dropdown.dur : undefined));
   });
   createEffect(() => { const b = box(); if (!b) return; applyBox(b); });
   createEffect(() => {
-    const l = layout(); const { vw, vh } = vp();
+    const l = layout; const { vw, vh } = vp();
     const isOpen = fmtOpen();
     if (vw === 0 || vh === 0 || !untrack(box)) return;
     // When dropdown opens, push the video top down by the height of the dropdown content.
@@ -425,7 +390,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   let isExiting = false;
 
   const triggerEnter = () => {
-    const a = anim(); const l = layout();
+    const a = anim; const l = layout;
     const vw = containerRef.offsetWidth; const vh = containerRef.offsetHeight;
     const target = computeBox(vw, vh, props.video.width, props.video.height, l);
     const tr = buildTr(a, target.isLandscape);
@@ -447,7 +412,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         setTimeout(() => {
           const nVw = containerRef.offsetWidth; const nVh = containerRef.offsetHeight;
           setVp({ vw: nVw, vh: nVh });
-          setBox(computeBox(nVw, nVh, props.video.width, props.video.height, layout()));
+          setBox(computeBox(nVw, nVh, props.video.width, props.video.height, layout));
         }, endMs);
       });
     });
@@ -465,7 +430,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     setAppState('estimatedBytes', null);
     setAppState('estimating',     false);
     cancelEstimate();
-    const a = anim(); const b = box();
+    const a = anim; const b = box();
     if (!b) { props.onBack(); return; }
     const tr = buildTr(a, !b.isLandscape);
     const { fade_dur } = a.timing;
@@ -548,7 +513,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       extractFrames(props.video.objectUrl, d, 20).then(setFrames);
     });
 
-    let rafId: number;
+    let rafId = 0;
     const tick = () => {
       const ct = videoRef.currentTime;
       const end = trimEnd(); const start = trimStart();
@@ -558,10 +523,12 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       setCurrentTime(videoRef.currentTime);
       rafId = requestAnimationFrame(tick);
     };
-    rafId = requestAnimationFrame(tick);
+    const startLoop = () => { if (!rafId) rafId = requestAnimationFrame(tick); };
+    const stopLoop = () => { cancelAnimationFrame(rafId); rafId = 0; };
 
-    videoRef.addEventListener('play',  () => setIsPlaying(true));
-    videoRef.addEventListener('pause', () => setIsPlaying(false));
+    videoRef.addEventListener('play',  () => { setIsPlaying(true); startLoop(); });
+    videoRef.addEventListener('pause', () => { setIsPlaying(false); stopLoop(); });
+    startLoop();
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !editingDuration()) { e.preventDefault(); togglePlay(); }
@@ -572,7 +539,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       ro.disconnect();
       cancelAnimationFrame(rafId);
       cancelAnimationFrame(scrambleRaf);
-      if (formatScrambleTimer != null) clearTimeout(formatScrambleTimer);
+      cancelAnimationFrame(formatScrambleRaf);
       document.removeEventListener('keydown', onKeyDown);
     });
   });
@@ -621,12 +588,12 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
             </div>
             {/* Center: + cross */}
             <Cross />
-            {/* Right: → arrow (triggers conversion) */}
+            {/* Right: X close (triggers exit) */}
             <div
               style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
-              onClick={() => document.dispatchEvent(new CustomEvent('convertr:run'))}
+              onClick={triggerExit}
             >
-              <ArrowSvg width={20} height={22} />
+              <XSvg width={20} height={22} />
             </div>
           </div>
 
@@ -710,8 +677,17 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
             format={displayFormat()} open={fmtOpen()} onClick={() => setFmtOpen(o => !o)}
             spring={{ dur: 0.200, x1: 0.006, y1: 0.984, x2: 0.000, y2: 1.109 }}
           />
-          <div style={{ cursor: 'pointer', display: 'flex' }} onClick={triggerExit}>
-            <XSvg width={20} height={22} />
+          <div
+            style={{
+              cursor: 'pointer', display: 'flex', 'align-items': 'center',
+              gap: '4px',
+              'font-family': MONO, 'font-size': '16px', 'line-height': '20px',
+              color: ACCENT, 'user-select': 'none', 'white-space': 'nowrap',
+            }}
+            onClick={() => document.dispatchEvent(new CustomEvent('convertr:run'))}
+          >
+            PROCESS
+            <ArrowSvg width={20} height={22} />
           </div>
         </div>
         {/* ── Format items: always in DOM, revealed by overflow:hidden as height grows ── */}

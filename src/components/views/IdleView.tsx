@@ -1,5 +1,4 @@
 import { Component, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { createDialKit } from 'dialkit/solid';
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import { setAppState } from '../../state/app';
@@ -60,46 +59,17 @@ let hasLaunched = false;
 // ── Main view ────────────────────────────────────────────────────────────────
 const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (props) => {
 
-  // ── Dials ──────────────────────────────────────────────────────────────────
-  const p = createDialKit('Idle Screen', {
-    phases: {
-      splash_ms:   [700, 100, 6000, 100],  // how long the splash frame holds
-      contract_ms: [100, 100, 3000, 50],   // duration of contraction to idle frame
-    },
-    guides: {
-      dur: [0.3,  0.05, 3.0, 0.05],
-      x1:  [0.8,  0.0,  1.0, 0.01],
-      y1:  [0.0,  -1.0, 2.0, 0.01],
-      x2:  [0.2,  0.0,  1.0, 0.01],
-      y2:  [1.0,  -1.0, 2.0, 0.01],
-    },
-    logo: {
-      dur: [0.3, 0.05, 3.0, 0.05],
-    },
-    text: {
-      line1_dur:   [0.2,  0.05, 3.0, 0.05],
-      line2_dur:   [0.2,  0.05, 3.0, 0.05],
-      line2_delay: [0.1,  0.0,  3.0, 0.05],
-      x1: [0.0,  0.0,  1.0, 0.01],
-      y1: [1.0,  -1.0, 2.0, 0.01],
-      x2: [0.28, 0.0,  1.0, 0.01],
-      y2: [1.0,  -1.0, 2.0, 0.01],
-    },
-    helper_fade_dur: [0.1, 0.05, 2.0, 0.05],
-    replay: { type: 'action' as const },
-  }, {
-    onAction: (path) => { if (path === 'replay') restartAnimation(); },
-  });
+  // ── Static config ────────────────────────────────────────────────────────────
+  const p = {
+    phases: { splash_ms: 700, contract_ms: 100 },
+    guides: { dur: 0.3, x1: 0.8, y1: 0.0, x2: 0.2, y2: 1.0 },
+    logo:   { dur: 0.3 },
+    text:   { line1_dur: 0.2, line2_dur: 0.2, line2_delay: 0.1, x1: 0.0, y1: 1.0, x2: 0.28, y2: 1.0 },
+    helper_fade_dur: 0.1,
+  };
 
-  // ── Derived easing strings ─────────────────────────────────────────────────
-  const guideEase = createMemo(() => {
-    const { x1, y1, x2, y2 } = p().guides;
-    return `cubic-bezier(${x1},${y1},${x2},${y2})`;
-  });
-  const textEase = createMemo(() => {
-    const { x1, y1, x2, y2 } = p().text;
-    return `cubic-bezier(${x1},${y1},${x2},${y2})`;
-  });
+  const guideEase = `cubic-bezier(${p.guides.x1},${p.guides.y1},${p.guides.x2},${p.guides.y2})`;
+  const textEase = `cubic-bezier(${p.text.x1},${p.text.y1},${p.text.x2},${p.text.y2})`;
 
   // ── Viewport size (drives responsive idle bbox) ────────────────────────────
   const [vp, setVp] = createSignal({ vw: 0, vh: 0 });
@@ -110,7 +80,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   });
 
   // ── Phase state ────────────────────────────────────────────────────────────
-  const [phase, setPhase] = createSignal<Phase>('splash');
+  const [phase, setPhase] = createSignal<Phase>(hasLaunched ? 'idle' : 'splash');
   const isIdle = createMemo(() => phase() === 'idle');
 
   // Timeout refs so we can cancel and restart on replay
@@ -118,7 +88,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
 
   const startTimers = () => {
     clearTimeout(t1); clearTimeout(t2);
-    const { splash_ms, contract_ms } = p().phases;
+    const { splash_ms, contract_ms } = p.phases;
     t1 = setTimeout(() => setPhase('contracting'), splash_ms) as unknown as number;
     t2 = setTimeout(() => setPhase('idle'), splash_ms + contract_ms) as unknown as number;
   };
@@ -137,9 +107,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   let crossBL!: HTMLDivElement, crossBR!: HTMLDivElement;
 
   onMount(() => {
-    if (hasLaunched) {
-      setPhase('idle');
-    } else {
+    if (!hasLaunched) {
       hasLaunched = true;
       startTimers();
     }
@@ -163,7 +131,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   // Apply guide positions whenever phase or dial values change
   createEffect(() => {
     const l = gl(), r = gr(), t = gt(), b = gb();
-    const tr = `${p().guides.dur}s ${guideEase()}`;
+    const tr = `${p.guides.dur}s ${guideEase}`;
     vLineL.style.transition = `left ${tr}`;
     vLineR.style.transition = `left ${tr}`;
     hLineT.style.transition = `top ${tr}`;
@@ -311,7 +279,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       </div>
 
       {/* ── Logo ──────────────────────────────────────────────────────────── */}
-      <Logo visible={phase() === 'splash'} dur={p().logo.dur} ease={guideEase()} />
+      <Logo visible={phase() === 'splash'} dur={p.logo.dur} ease={guideEase} />
 
       {/* ── Idle content ──────────────────────────────────────────────────── */}
       <div style={{ position: 'absolute', top: 'calc(50% - 40px)', left: 'calc(50% - 68.5px)', translate: '-50% -50%', display: 'flex', 'flex-direction': 'column', 'align-items': 'flex-start' }}>
@@ -320,7 +288,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
           display: 'inline-flex', 'align-items': 'center', background: ACCENT,
           'clip-path': 'inset(0 100% 0 0)',
           animation: isIdle()
-            ? `label-highlight ${p().text.line1_dur}s ${textEase()} forwards`
+            ? `label-highlight ${p.text.line1_dur}s ${textEase} forwards`
             : 'none',
         }}>
           <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-size': '24px', 'line-height': '30px', 'font-weight': '400', color: BG }}>DROP A FILE</span>
@@ -330,7 +298,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
           display: 'inline-flex', 'align-items': 'center', background: ACCENT,
           'clip-path': 'inset(0 100% 0 0)',
           animation: isIdle()
-            ? `label-highlight ${p().text.line2_dur}s ${textEase()} ${p().text.line2_delay}s forwards`
+            ? `label-highlight ${p.text.line2_dur}s ${textEase} ${p.text.line2_delay}s forwards`
             : 'none',
         }}>
           <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-size': '24px', 'line-height': '30px', 'font-weight': '400', color: BG }}>OR URL</span>
@@ -342,7 +310,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         position: 'absolute', top: idlePos().helperTop, left: '50%', translate: '-50% 0',
         display: 'flex', 'flex-direction': 'column', 'align-items': 'center',
         opacity: isIdle() ? '1' : '0',
-        transition: `opacity ${p().helper_fade_dur}s ease`,
+        transition: `opacity ${p.helper_fade_dur}s ease`,
       }}>
         <span style={{ 'font-family': "'IBM Plex Mono', system-ui, monospace", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>click to browse - max 500mb</span>
         <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>ctrl+v anywhere to paste URL</span>

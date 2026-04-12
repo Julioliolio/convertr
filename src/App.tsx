@@ -1,7 +1,8 @@
-import { Component, Show, createSignal, For } from 'solid-js';
+import { Component, Show, createSignal, For, onCleanup } from 'solid-js';
 import IdleView from './components/views/IdleView';
 import EditorView from './components/views/EditorView';
 import PlaygroundView from './components/views/PlaygroundView';
+import SliderPlayground from './components/views/SliderPlayground';
 import { FormatButton } from './shared/ui';
 
 export interface VideoInfo {
@@ -22,11 +23,12 @@ const FORMATS = ['GIF', 'AVIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
 
 // ── Dev tab bar ───────────────────────────────────────────────────────────────
 type DevTab = 'app' | 'playground';
-type PlaygroundTab = 'video' | 'dropdown';
+type PlaygroundTab = 'video' | 'dropdown' | 'slider';
 
 const PLAYGROUND_TABS: { id: PlaygroundTab; label: string }[] = [
   { id: 'video',    label: 'video' },
   { id: 'dropdown', label: 'dropdown' },
+  { id: 'slider',   label: 'slider' },
 ];
 
 const DevBar: Component<{
@@ -41,7 +43,7 @@ const DevBar: Component<{
   ];
 
   const btnStyle = (active: boolean) => ({
-    background: active ? '#FC006D' : 'transparent',
+    background: active ? ACCENT : 'transparent',
     color:      active ? '#fff'    : '#666',
     border: 'none', cursor: 'pointer',
     padding: '4px 10px',
@@ -153,6 +155,7 @@ const BezierEditor: Component<{
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   };
+  onCleanup(() => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); });
 
   const curve = () => `M ${bx(0)} ${by(0)} C ${bx(p.x1)} ${by(p.y1)} ${bx(p.x2)} ${by(p.y2)} ${bx(1)} ${by(1)}`;
 
@@ -358,8 +361,8 @@ const DropdownTest: Component = () => {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 const App: Component = () => {
-  const [devTab, setDevTab] = createSignal<DevTab>('playground');
-  const [pgTab, setPgTab] = createSignal<PlaygroundTab>('video');
+  const [devTab, setDevTab] = createSignal<DevTab>(IS_DEV ? 'playground' : 'app');
+  const [pgTab, setPgTab] = createSignal<PlaygroundTab>('slider');
   const [view, setView] = createSignal<'idle' | 'editor'>('idle');
   const [video, setVideo] = createSignal<VideoInfo | null>(null);
 
@@ -383,6 +386,9 @@ const App: Component = () => {
         </Show>
         <Show when={pgTab() === 'dropdown'}>
           <DropdownTest />
+        </Show>
+        <Show when={pgTab() === 'slider'}>
+          <SliderPlayground />
         </Show>
       </Show>
       <Show when={!IS_DEV || devTab() === 'app'}>
