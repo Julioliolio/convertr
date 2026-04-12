@@ -10,6 +10,7 @@ import { fetchEstimate, cancelEstimate } from '../../api/estimate';
 import { appState, setAppState, fps, width, vidWidth, crf } from '../../state/app';
 import { ACCENT, ACCENT_75, BG, MONO } from '../../shared/tokens';
 import { PlayPauseIcon, XSvg, ArrowSvg, Chip, Cross, FormatButton, CHEVRON_1, CHEVRON_2, MINUS_1, MINUS_2 } from '../../shared/ui';
+import LoadingOverlay from '../LoadingOverlay';
 import { fmtDuration, fmtBytes, extractFrames } from '../../shared/utils';
 
 // Server-supported formats (lowercase); AVIF not supported server-side
@@ -113,6 +114,9 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const [isConverting,   setIsConverting]   = createSignal(false);
   const [resultUrl,      setResultUrl]      = createSignal<string | null>(null);
   const [resultFilename, setResultFilename] = createSignal<string | null>(null);
+
+  // ── Intro loading overlay (plays inside bounding box on mount) ──────────────
+  const [showIntroOverlay, setShowIntroOverlay] = createSignal(true);
 
   const trimmedDuration = () => trimEnd() - trimStart();
 
@@ -570,6 +574,19 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
           autoplay muted playsinline
           style={{ width: '100%', height: '100%', display: 'block', 'object-fit': 'cover' }}
         />
+        {/* Intro loading overlay — covers bbox while video loads */}
+        <Show when={showIntroOverlay()}>
+          <div style={{ position: 'absolute', inset: '0', overflow: 'hidden', 'z-index': '10' }}>
+            <LoadingOverlay
+              width={props.video.width}
+              height={props.video.height}
+              progress={0}
+              progressMsg=""
+              onDone={() => setShowIntroOverlay(false)}
+              delay={850}
+            />
+          </div>
+        </Show>
         {/* Video overlay — padding: 16px (p-4 from Paper) */}
         <div style={{
           position: 'absolute', inset: '0',
@@ -726,29 +743,41 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         <ControlPanel />
       </div>
 
-      {/* ── Converting overlay ──────────────────────────────────────────────── */}
+      {/* ── Converting overlay (animated grid) ────────────────────────────── */}
       <Show when={isConverting()}>
         <div style={{
           position: 'fixed', inset: '0',
-          background: 'rgba(248,247,246,0.92)',
-          display: 'flex', 'flex-direction': 'column',
-          'align-items': 'center', 'justify-content': 'center',
-          gap: '12px',
-          'font-family': MONO,
+          overflow: 'hidden',
           'z-index': '100',
         }}>
-          <span style={{ color: ACCENT, 'font-size': '12px', 'line-height': '16px' }}>
-            {appState.progressMsg || 'Converting...'}
-          </span>
-          <div style={{ width: '200px', height: '2px', background: 'rgba(252,0,109,0.2)', 'border-radius': '1px' }}>
-            <div style={{
-              width: `${appState.progress}%`, height: '100%',
-              background: ACCENT, transition: 'width 0.3s', 'border-radius': '1px',
-            }} />
+          <LoadingOverlay
+            width={window.innerWidth}
+            height={window.innerHeight}
+            progress={appState.progress}
+            progressMsg={appState.progressMsg || 'Converting...'}
+          />
+          {/* Progress info centered on top of animation */}
+          <div style={{
+            position: 'absolute', inset: '0',
+            display: 'flex', 'flex-direction': 'column',
+            'align-items': 'center', 'justify-content': 'center',
+            gap: '12px',
+            'font-family': MONO,
+            'pointer-events': 'none',
+          }}>
+            <span style={{ background: BG, padding: '2px 6px', color: ACCENT, 'font-size': '12px', 'line-height': '16px' }}>
+              {appState.progressMsg || 'Converting...'}
+            </span>
+            <div style={{ width: '200px', height: '2px', background: 'rgba(252,0,109,0.2)', 'border-radius': '1px' }}>
+              <div style={{
+                width: `${appState.progress}%`, height: '100%',
+                background: ACCENT, transition: 'width 0.3s', 'border-radius': '1px',
+              }} />
+            </div>
+            <span style={{ background: BG, padding: '2px 6px', color: ACCENT, 'font-size': '12px', 'line-height': '16px' }}>
+              {Math.round(appState.progress)}%
+            </span>
           </div>
-          <span style={{ color: ACCENT, 'font-size': '12px', 'line-height': '16px' }}>
-            {Math.round(appState.progress)}%
-          </span>
         </div>
       </Show>
 

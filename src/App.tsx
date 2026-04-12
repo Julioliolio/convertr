@@ -3,6 +3,7 @@ import IdleView from './components/views/IdleView';
 import EditorView from './components/views/EditorView';
 import PlaygroundView from './components/views/PlaygroundView';
 import SliderPlayground from './components/views/SliderPlayground';
+import LoadingPlayground from './components/views/LoadingPlayground';
 import { FormatButton } from './shared/ui';
 
 export interface VideoInfo {
@@ -23,12 +24,13 @@ const FORMATS = ['GIF', 'AVIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
 
 // ── Dev tab bar ───────────────────────────────────────────────────────────────
 type DevTab = 'app' | 'playground';
-type PlaygroundTab = 'video' | 'dropdown' | 'slider';
+type PlaygroundTab = 'video' | 'dropdown' | 'slider' | 'loading';
 
 const PLAYGROUND_TABS: { id: PlaygroundTab; label: string }[] = [
   { id: 'video',    label: 'video' },
   { id: 'dropdown', label: 'dropdown' },
   { id: 'slider',   label: 'slider' },
+  { id: 'loading',  label: 'loading' },
 ];
 
 const DevBar: Component<{
@@ -362,10 +364,9 @@ const DropdownTest: Component = () => {
 // ── App ───────────────────────────────────────────────────────────────────────
 const App: Component = () => {
   const [devTab, setDevTab] = createSignal<DevTab>(IS_DEV ? 'playground' : 'app');
-  const [pgTab, setPgTab] = createSignal<PlaygroundTab>('slider');
+  const [pgTab, setPgTab] = createSignal<PlaygroundTab>('loading');
   const [view, setView] = createSignal<'idle' | 'editor'>('idle');
   const [video, setVideo] = createSignal<VideoInfo | null>(null);
-
   const handleVideoSelected = (info: VideoInfo) => {
     setVideo(info);
     setView('editor');
@@ -389,6 +390,9 @@ const App: Component = () => {
         </Show>
         <Show when={pgTab() === 'slider'}>
           <SliderPlayground />
+        </Show>
+        <Show when={pgTab() === 'loading'}>
+          <LoadingPlayground />
         </Show>
       </Show>
       <Show when={!IS_DEV || devTab() === 'app'}>
