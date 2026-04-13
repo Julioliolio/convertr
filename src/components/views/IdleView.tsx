@@ -281,9 +281,10 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
           left: SPLASH.GL, top: SPLASH.GT,
           width: `calc(${SPLASH.GR} - ${SPLASH.GL})`,
           height: `calc(${SPLASH.GB} - ${SPLASH.GT})`,
-          'background-image': 'radial-gradient(circle, rgba(252,0,109,1) 1px, transparent 1px)',
-          'background-size': '81px 81px',
+          'background-image': 'radial-gradient(circle, rgba(252,0,109,0.5) 0.75px, transparent 0.75px)',
+          'background-size': '32px 32px',
           'background-position': '50% 50%',
+          'background-attachment': 'fixed',
           opacity: '1',
           'pointer-events': 'none',
         }}
