@@ -105,6 +105,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   let hLineT!: HTMLDivElement, hLineB!: HTMLDivElement;
   let crossTL!: HTMLDivElement, crossTR!: HTMLDivElement;
   let crossBL!: HTMLDivElement, crossBR!: HTMLDivElement;
+  let dotBg!: HTMLDivElement;
 
   onMount(() => {
     if (!hasLaunched) {
@@ -128,10 +129,16 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   const gt = createMemo(() => phase() === 'splash' ? SPLASH.GT : idlePos().gt);
   const gb = createMemo(() => phase() === 'splash' ? SPLASH.GB : idlePos().gb);
 
+  // When remounting after a video cancel, skip the first transition so
+  // guide lines and crosshairs don't animate from SPLASH to idle out of sync.
+  let skipTransition = hasLaunched;
+
   // Apply guide positions whenever phase or dial values change
   createEffect(() => {
     const l = gl(), r = gr(), t = gt(), b = gb();
-    const tr = `${p.guides.dur}s ${guideEase}`;
+    const dur = skipTransition ? '0s' : `${p.guides.dur}s`;
+    const tr = `${dur} ${guideEase}`;
+    if (skipTransition) skipTransition = false;
     vLineL.style.transition = `left ${tr}`;
     vLineR.style.transition = `left ${tr}`;
     hLineT.style.transition = `top ${tr}`;
@@ -145,6 +152,11 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     crossTR.style.top  = `calc(${t} - 10px)`;  crossTR.style.left = `calc(${r} - 10px)`;
     crossBL.style.top  = `calc(${b} - 10px)`;  crossBL.style.left = `calc(${l} - 10px)`;
     crossBR.style.top  = `calc(${b} - 10px)`;  crossBR.style.left = `calc(${r} - 10px)`;
+    dotBg.style.transition = `left ${tr}, top ${tr}, width ${tr}, height ${tr}, opacity ${tr}`;
+    dotBg.style.left   = l;
+    dotBg.style.top    = t;
+    dotBg.style.width  = `calc(${r} - ${l})`;
+    dotBg.style.height = `calc(${b} - ${t})`;
   });
 
   // ── File / URL handlers ────────────────────────────────────────────────────
@@ -261,6 +273,22 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
+      {/* ── Dotted background inside bounding box ────────────────────────── */}
+      <div
+        ref={dotBg}
+        style={{
+          position: 'absolute',
+          left: SPLASH.GL, top: SPLASH.GT,
+          width: `calc(${SPLASH.GR} - ${SPLASH.GL})`,
+          height: `calc(${SPLASH.GB} - ${SPLASH.GT})`,
+          'background-image': 'radial-gradient(circle, rgba(252,0,109,0.5) 1px, transparent 1px)',
+          'background-size': '32px 32px',
+          'background-position': 'center center',
+          opacity: '1',
+          'pointer-events': 'none',
+        }}
+      />
+
       {/* ── Guide lines ───────────────────────────────────────────────────── */}
       <div ref={vLineL} style={{ position: 'absolute', top: '0', bottom: '0', left: SPLASH.GL, width: '1px', background: ACCENT_75 }} />
       <div ref={vLineR} style={{ position: 'absolute', top: '0', bottom: '0', left: SPLASH.GR, width: '1px', background: ACCENT_75 }} />
@@ -278,32 +306,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         <div style={armV} /><div style={armH} />
       </div>
 
-      {/* ── Logo ──────────────────────────────────────────────────────────── */}
-      <Logo visible={phase() === 'splash'} dur={p.logo.dur} ease={guideEase} />
-
-      {/* ── Idle content ──────────────────────────────────────────────────── */}
-      <div style={{ position: 'absolute', top: 'calc(50% - 40px)', left: 'calc(50% - 68.5px)', translate: '-50% -50%', display: 'flex', 'flex-direction': 'column', 'align-items': 'flex-start' }}>
-        {/* Line 1 */}
-        <div style={{
-          display: 'inline-flex', 'align-items': 'center', background: ACCENT,
-          'clip-path': 'inset(0 100% 0 0)',
-          animation: isIdle()
-            ? `label-highlight ${p.text.line1_dur}s ${textEase} forwards`
-            : 'none',
-        }}>
-          <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-size': '24px', 'line-height': '30px', 'font-weight': '400', color: BG }}>DROP A FILE</span>
-        </div>
-        {/* Line 2 */}
-        <div style={{
-          display: 'inline-flex', 'align-items': 'center', background: ACCENT,
-          'clip-path': 'inset(0 100% 0 0)',
-          animation: isIdle()
-            ? `label-highlight ${p.text.line2_dur}s ${textEase} ${p.text.line2_delay}s forwards`
-            : 'none',
-        }}>
-          <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-size': '24px', 'line-height': '30px', 'font-weight': '400', color: BG }}>OR URL</span>
-        </div>
-      </div>
+      {/* ── Logo (removed – dotted background replaces splash logo) ─────── */}
 
       {/* ── Helper text ───────────────────────────────────────────────────── */}
       <div style={{
@@ -312,8 +315,8 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         opacity: isIdle() ? '1' : '0',
         transition: `opacity ${p.helper_fade_dur}s ease`,
       }}>
-        <span style={{ 'font-family': "'IBM Plex Mono', system-ui, monospace", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>click to browse - max 500mb</span>
-        <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>ctrl+v anywhere to paste URL</span>
+        <span style={{ 'font-family': "'IBM Plex Mono', system-ui, monospace", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>DROP A FILE OR URL</span>
+        <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>click to browse or ctrl+v anywhere</span>
       </div>
 
       {/* ── URL fetch status ──────────────────────────────────────────────── */}
