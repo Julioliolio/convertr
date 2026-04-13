@@ -1,88 +1,27 @@
 import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
+import { drawSymbol, type SymbolType } from '../shared/symbols';
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const CELL_SIZE     = 24;
 const STROKE_W      = 1;
-const SYMBOL        = 'star' as const;
+const SYMBOL: SymbolType = 'square';
 const COLOR         = '#fc006d';
-const LINGER_COUNT  = 16;
+const LINGER_COUNT  = 2;
 const LINGER_DUR    = 0.5;    // seconds
 const FLICKER_SPEED = 75;     // ms per flicker toggle
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type CellInfo = { row: number; col: number };
 
-// ── Canvas drawing helpers ─────────────────────────────────────────────────
-function drawSymbol(
-  ctx: CanvasRenderingContext2D,
-  x: number, y: number,
-  s: number, sw: number,
-  color: string,
-) {
-  const h = s / 2, q = s * 0.3;
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = sw;
-  ctx.lineCap = 'round';
+// ── Tile dimensions (in cells) — pattern repeats across the canvas ─────────
+const TILE_COLS = 12;
+const TILE_ROWS = 8;
 
-  switch (SYMBOL) {
-    case 'cross':
-      ctx.beginPath();
-      ctx.moveTo(x + h, y + sw); ctx.lineTo(x + h, y + s - sw);
-      ctx.moveTo(x + sw, y + h); ctx.lineTo(x + s - sw, y + h);
-      ctx.stroke();
-      break;
-    case 'dot':
-      ctx.beginPath();
-      ctx.arc(x + h, y + h, sw + 0.5, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    case 'vline':
-      ctx.beginPath();
-      ctx.moveTo(x + h, y + q); ctx.lineTo(x + h, y + s - q);
-      ctx.stroke();
-      break;
-    case 'hash':
-      ctx.beginPath();
-      ctx.moveTo(x + s * 0.35, y + q); ctx.lineTo(x + s * 0.35, y + s - q);
-      ctx.moveTo(x + s * 0.65, y + q); ctx.lineTo(x + s * 0.65, y + s - q);
-      ctx.moveTo(x + q, y + s * 0.35); ctx.lineTo(x + s - q, y + s * 0.35);
-      ctx.moveTo(x + q, y + s * 0.65); ctx.lineTo(x + s - q, y + s * 0.65);
-      ctx.stroke();
-      break;
-    case 'diag-r':
-      ctx.beginPath();
-      ctx.moveTo(x + q, y + s - q); ctx.lineTo(x + s - q, y + q);
-      ctx.stroke();
-      break;
-    case 'diag-l':
-      ctx.beginPath();
-      ctx.moveTo(x + q, y + q); ctx.lineTo(x + s - q, y + s - q);
-      ctx.stroke();
-      break;
-    case 'star':
-      ctx.beginPath();
-      ctx.moveTo(x + h, y + q); ctx.lineTo(x + h, y + s - q);
-      ctx.moveTo(x + q, y + h); ctx.lineTo(x + s - q, y + h);
-      ctx.moveTo(x + q, y + q); ctx.lineTo(x + s - q, y + s - q);
-      ctx.moveTo(x + s - q, y + q); ctx.lineTo(x + q, y + s - q);
-      ctx.stroke();
-      break;
-    case 'ring': {
-      const r = s * 0.3;
-      ctx.beginPath();
-      ctx.arc(x + h, y + h, r, 0, Math.PI * 2);
-      ctx.stroke();
-      break;
-    }
-  }
-}
-
-// ── Farthest-point sampling ────────────────────────────────────────────────
-function selectLingerCells(gRows: number, gCols: number, count: number): CellInfo[] {
+// ── Farthest-point sampling within a tile ──────────────────────────────────
+function sampleTilePattern(count: number): CellInfo[] {
   const allCells: CellInfo[] = [];
-  for (let r = 0; r < gRows; r++)
-    for (let c = 0; c < gCols; c++)
+  for (let r = 0; r < TILE_ROWS; r++)
+    for (let c = 0; c < TILE_COLS; c++)
       allCells.push({ row: r, col: c });
 
   const n = Math.min(count, allCells.length);
@@ -123,12 +62,25 @@ function selectLingerCells(gRows: number, gCols: number, count: number): CellInf
   return picked;
 }
 
+// ── Tile the pattern across the full canvas ────────────────────────────────
+function buildTiledCells(gRows: number, gCols: number, pattern: CellInfo[]): CellInfo[] {
+  const cells: CellInfo[] = [];
+  for (let tileRow = 0; tileRow * TILE_ROWS < gRows; tileRow++) {
+    for (let tileCol = 0; tileCol * TILE_COLS < gCols; tileCol++) {
+      for (const p of pattern) {
+        const row = tileRow * TILE_ROWS + p.row;
+        const col = tileCol * TILE_COLS + p.col;
+        if (row < gRows && col < gCols) {
+          cells.push({ row, col });
+        }
+      }
+    }
+  }
+  return cells;
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 const LoadingOverlay: Component<{
-  width: number;
-  height: number;
-  progress: number;
-  progressMsg: string;
   onDone?: () => void;
   delay?: number;
 }> = (p) => {
@@ -150,7 +102,7 @@ const LoadingOverlay: Component<{
     const flickerOn = Math.floor((now - startTime) / FLICKER_SPEED) % 2 === 0;
     if (flickerOn) {
       for (const cell of lingerCells) {
-        drawSymbol(ctx, cell.col * s, cell.row * s, s, STROKE_W, COLOR);
+        drawSymbol(ctx, SYMBOL, cell.col * s, cell.row * s, s, STROKE_W, COLOR);
       }
     }
   }
@@ -168,37 +120,34 @@ const LoadingOverlay: Component<{
     rafId = requestAnimationFrame(loop);
   }
 
-  onMount(() => {
-    // Measure the parent container — not the canvas — for reliable dimensions
-    const parent = canvasRef.parentElement!;
-    const rect = parent.getBoundingClientRect();
+  function setupCanvas() {
+    // Measure at animation start — layout is fully resolved by now
+    const rect = canvasRef.getBoundingClientRect();
     vw = rect.width;
     vh = rect.height;
-    const gCols = Math.ceil(vw / CELL_SIZE);
-    const gRows = Math.ceil(vh / CELL_SIZE);
 
     const dpr = window.devicePixelRatio || 1;
-    // Set backing store to match container exactly
     canvasRef.width = Math.ceil(vw * dpr);
     canvasRef.height = Math.ceil(vh * dpr);
-    // Set CSS size explicitly in pixels — avoids any stretching from width:100%/height:100%
-    canvasRef.style.width = `${vw}px`;
-    canvasRef.style.height = `${vh}px`;
     const ctx = canvasRef.getContext('2d')!;
     ctx.scale(dpr, dpr);
 
-    lingerCells = selectLingerCells(gRows, gCols, LINGER_COUNT);
+    const gCols = Math.ceil(vw / CELL_SIZE);
+    const gRows = Math.ceil(vh / CELL_SIZE);
+    const tilePattern = sampleTilePattern(LINGER_COUNT);
+    lingerCells = buildTiledCells(gRows, gCols, tilePattern);
 
-    const start = () => {
-      startTime = performance.now();
-      rafId = requestAnimationFrame(loop);
-    };
+    startTime = performance.now();
+    rafId = requestAnimationFrame(loop);
+  }
 
+  onMount(() => {
     const ms = p.delay ?? 0;
     if (ms > 0) {
-      delayTimer = window.setTimeout(start, ms);
+      delayTimer = window.setTimeout(setupCanvas, ms);
     } else {
-      start();
+      // Even with no delay, defer to next frame so layout resolves
+      rafId = requestAnimationFrame(() => setupCanvas());
     }
   });
 

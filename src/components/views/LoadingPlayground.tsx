@@ -1,6 +1,6 @@
-import { Component, Show, createSignal, createEffect, onCleanup, onMount, For } from 'solid-js';
+import { Component, createSignal, createEffect, onCleanup, onMount, For } from 'solid-js';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
-import { ArrowSvg } from '../../shared/ui';
+import { drawSymbol, ALL_SYMBOLS, type SymbolType } from '../../shared/symbols';
 
 // ── Synthetic test video ─────────────────────────────────────────────────────
 function createTestVideo(): Promise<string> {
@@ -38,89 +38,8 @@ const ORIENTATIONS = {
   portrait:  { boxW: 315, boxH: 560 },
 } as const;
 
-// ── Symbol types ────────────────────────────────────────────────────────────
-type SymbolType = 'cross' | 'dot' | 'vline' | 'hash' | 'diag-r' | 'diag-l' | 'star' | 'ring';
-
-const ALL_SYMBOLS: { id: SymbolType; label: string }[] = [
-  { id: 'cross',  label: '+' },
-  { id: 'dot',    label: '.' },
-  { id: 'vline',  label: '|' },
-  { id: 'hash',   label: '#' },
-  { id: 'diag-r', label: '/' },
-  { id: 'diag-l', label: '\\' },
-  { id: 'star',   label: '*' },
-  { id: 'ring',   label: 'o' },
-];
-
 // ── Cell type ───────────────────────────────────────────────────────────────
 type CellInfo = { row: number; col: number };
-
-// ── Canvas drawing helpers ──────────────────────────────────────────────────
-function drawSymbol(
-  ctx: CanvasRenderingContext2D,
-  type: SymbolType,
-  x: number, y: number,
-  s: number, sw: number,
-  color: string,
-) {
-  const h = s / 2, q = s * 0.3;
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = sw;
-  ctx.lineCap = 'round';
-
-  switch (type) {
-    case 'cross':
-      ctx.beginPath();
-      ctx.moveTo(x + h, y + sw); ctx.lineTo(x + h, y + s - sw);
-      ctx.moveTo(x + sw, y + h); ctx.lineTo(x + s - sw, y + h);
-      ctx.stroke();
-      break;
-    case 'dot':
-      ctx.beginPath();
-      ctx.arc(x + h, y + h, sw + 0.5, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    case 'vline':
-      ctx.beginPath();
-      ctx.moveTo(x + h, y + q); ctx.lineTo(x + h, y + s - q);
-      ctx.stroke();
-      break;
-    case 'hash':
-      ctx.beginPath();
-      ctx.moveTo(x + s * 0.35, y + q); ctx.lineTo(x + s * 0.35, y + s - q);
-      ctx.moveTo(x + s * 0.65, y + q); ctx.lineTo(x + s * 0.65, y + s - q);
-      ctx.moveTo(x + q, y + s * 0.35); ctx.lineTo(x + s - q, y + s * 0.35);
-      ctx.moveTo(x + q, y + s * 0.65); ctx.lineTo(x + s - q, y + s * 0.65);
-      ctx.stroke();
-      break;
-    case 'diag-r':
-      ctx.beginPath();
-      ctx.moveTo(x + q, y + s - q); ctx.lineTo(x + s - q, y + q);
-      ctx.stroke();
-      break;
-    case 'diag-l':
-      ctx.beginPath();
-      ctx.moveTo(x + q, y + q); ctx.lineTo(x + s - q, y + s - q);
-      ctx.stroke();
-      break;
-    case 'star':
-      ctx.beginPath();
-      ctx.moveTo(x + h, y + q); ctx.lineTo(x + h, y + s - q);
-      ctx.moveTo(x + q, y + h); ctx.lineTo(x + s - q, y + h);
-      ctx.moveTo(x + q, y + q); ctx.lineTo(x + s - q, y + s - q);
-      ctx.moveTo(x + s - q, y + q); ctx.lineTo(x + q, y + s - q);
-      ctx.stroke();
-      break;
-    case 'ring': {
-      const r = s * 0.3;
-      ctx.beginPath();
-      ctx.arc(x + h, y + h, r, 0, Math.PI * 2);
-      ctx.stroke();
-      break;
-    }
-  }
-}
 
 // ── Farthest-point sampling ─────────────────────────────────────────────────
 function selectLingerCells(gRows: number, gCols: number, count: number): CellInfo[] {
@@ -167,33 +86,6 @@ function selectLingerCells(gRows: number, gCols: number, count: number): CellInf
   return picked;
 }
 
-// ── Drop zone ───────────────────────────────────────────────────────────────
-const DropZone: Component<{ onFile: (file: File) => void; width: number; height: number }> = (p) => {
-  let inputRef!: HTMLInputElement;
-  const [hover, setHover] = createSignal(false);
-  return (
-    <div
-      onClick={() => inputRef.click()}
-      onDragOver={e => { e.preventDefault(); setHover(true); }}
-      onDragLeave={() => setHover(false)}
-      onDrop={e => { e.preventDefault(); setHover(false); const f = e.dataTransfer?.files[0]; if (f && f.type.startsWith('video/')) p.onFile(f); }}
-      style={{
-        width: `${p.width}px`, height: `${p.height}px`,
-        display: 'flex', 'flex-direction': 'column',
-        'align-items': 'center', 'justify-content': 'center', gap: '16px',
-        outline: `2px solid ${hover() ? ACCENT : '#ccc'}`, cursor: 'pointer',
-        'font-family': MONO, 'font-size': '13px', color: hover() ? ACCENT : '#999',
-        transition: 'outline-color 0.15s, color 0.15s', background: BG, 'user-select': 'none',
-      }}
-    >
-      <ArrowSvg width={28} height={30} />
-      <span>drop a video or click to browse</span>
-      <input ref={inputRef!} type="file" accept="video/*" style={{ display: 'none' }}
-        onChange={e => { const f = e.currentTarget.files?.[0]; if (f) p.onFile(f); }} />
-    </div>
-  );
-};
-
 // ── CtrlSlider ──────────────────────────────────────────────────────────────
 const CtrlSlider: Component<{
   label: string; value: number; min: number; max: number;
@@ -220,21 +112,14 @@ const LoadingPlayground: Component = () => {
 
   onMount(async () => { setVideoSrc(await createTestVideo()); });
 
-  const loadFile = (file: File) => {
-    const prev = videoSrc();
-    if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
-    setVideoSrc(URL.createObjectURL(file));
-    replay();
-  };
-
   // ── Controls ──────────────────────────────────────────────────────────────
   const [cellSize, setCellSize]           = createSignal(24);
   const [strokeW, setStrokeW]             = createSignal(1);
   const [color, setColor]                 = createSignal('#fc006d');
-  const [lingerCount, setLingerCount]     = createSignal(16);
+  const [lingerCount, setLingerCount]     = createSignal(2);
   const [lingerDuration, setLingerDuration] = createSignal(0.5);
   const [flickerSpeed, setFlickerSpeed]   = createSignal(75);
-  const [symbol, setSymbol]               = createSignal<SymbolType>('star');
+  const [symbol, setSymbol]               = createSignal<SymbolType>('square');
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const gridCols = () => Math.ceil(box().boxW / cellSize());
@@ -304,7 +189,7 @@ const LoadingPlayground: Component = () => {
 
   // ── Copy values ────────────────────────────────────────────────────────────
   const [copyState, setCopyState] = createSignal<'idle' | 'ok' | 'err'>('idle');
-  const copyValues = () => {
+  const copyValues = async () => {
     const text = `{\n` +
       `  cellSize: ${cellSize()},\n` +
       `  strokeW: ${strokeW()},\n` +
@@ -315,13 +200,7 @@ const LoadingPlayground: Component = () => {
       `  flickerSpeed: ${flickerSpeed()},\n` +
       `}`;
     try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
+      await navigator.clipboard.writeText(text);
       setCopyState('ok');
     } catch { setCopyState('err'); }
     setTimeout(() => setCopyState('idle'), 2500);
@@ -430,7 +309,7 @@ const LoadingPlayground: Component = () => {
         {/* LINGER */}
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
           <div style={{ 'font-size': '10px', color: '#333', 'letter-spacing': '0.08em', 'margin-bottom': '2px' }}>LINGER</div>
-          <CtrlSlider label="count" value={lingerCount()} min={5} max={50} onChange={setLingerCount} accent={color()} />
+          <CtrlSlider label="count" value={lingerCount()} min={1} max={50} onChange={setLingerCount} accent={color()} />
           <CtrlSlider label="duration" value={lingerDuration()} min={0.5} max={5} step={0.5} onChange={setLingerDuration} suffix="s" accent={color()} />
           <CtrlSlider label="flicker" value={flickerSpeed()} min={50} max={500} step={25} onChange={setFlickerSpeed} suffix="ms" accent={color()} />
         </div>

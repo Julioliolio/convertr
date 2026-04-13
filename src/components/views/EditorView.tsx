@@ -578,10 +578,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         <Show when={showIntroOverlay()}>
           <div style={{ position: 'absolute', inset: '0', overflow: 'hidden', 'z-index': '10' }}>
             <LoadingOverlay
-              width={props.video.width}
-              height={props.video.height}
-              progress={0}
-              progressMsg=""
               onDone={() => setShowIntroOverlay(false)}
               delay={850}
             />
@@ -750,12 +746,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
           overflow: 'hidden',
           'z-index': '100',
         }}>
-          <LoadingOverlay
-            width={window.innerWidth}
-            height={window.innerHeight}
-            progress={appState.progress}
-            progressMsg={appState.progressMsg || 'Converting...'}
-          />
+          <LoadingOverlay />
           {/* Progress info centered on top of animation */}
           <div style={{
             position: 'absolute', inset: '0',
