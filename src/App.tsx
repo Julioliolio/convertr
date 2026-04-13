@@ -4,6 +4,7 @@ import EditorView from './components/views/EditorView';
 import PlaygroundView from './components/views/PlaygroundView';
 import SliderPlayground from './components/views/SliderPlayground';
 import LoadingPlayground from './components/views/LoadingPlayground';
+import DottedBgPlayground from './components/views/DottedBgPlayground';
 import { FormatButton } from './shared/ui';
 
 export interface VideoInfo {
@@ -24,13 +25,14 @@ const FORMATS = ['GIF', 'AVIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
 
 // ── Dev tab bar ───────────────────────────────────────────────────────────────
 type DevTab = 'app' | 'playground';
-type PlaygroundTab = 'video' | 'dropdown' | 'slider' | 'loading';
+type PlaygroundTab = 'video' | 'dropdown' | 'slider' | 'loading' | 'dotted-bg';
 
 const PLAYGROUND_TABS: { id: PlaygroundTab; label: string }[] = [
-  { id: 'video',    label: 'video' },
-  { id: 'dropdown', label: 'dropdown' },
-  { id: 'slider',   label: 'slider' },
-  { id: 'loading',  label: 'loading' },
+  { id: 'video',     label: 'video' },
+  { id: 'dropdown',  label: 'dropdown' },
+  { id: 'slider',    label: 'slider' },
+  { id: 'loading',   label: 'loading' },
+  { id: 'dotted-bg', label: 'dotted bg' },
 ];
 
 const DevBar: Component<{
@@ -393,6 +395,9 @@ const App: Component = () => {
         </Show>
         <Show when={pgTab() === 'loading'}>
           <LoadingPlayground />
+        </Show>
+        <Show when={pgTab() === 'dotted-bg'}>
+          <DottedBgPlayground />
         </Show>
       </Show>
       <Show when={!IS_DEV || devTab() === 'app'}>
