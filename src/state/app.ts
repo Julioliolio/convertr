@@ -1,4 +1,3 @@
-import { createSignal, createRoot } from 'solid-js';
 import { createStore } from 'solid-js/store';
 
 export type ViewName = 'idle' | 'editor' | 'output';
@@ -30,6 +29,11 @@ export interface AppState {
   uploadReady: boolean;
   estimatedBytes: number | null;
   estimating: boolean;
+  // ── Conversion parameters ───────────────────────────────────────────────
+  fps: number;
+  width: number;       // GIF output width (px, 0 = original)
+  vidWidth: number;    // non-GIF output width (px, 0 = original)
+  crf: number;
 }
 
 const [appState, setAppState] = createStore<AppState>({
@@ -51,18 +55,10 @@ const [appState, setAppState] = createStore<AppState>({
   uploadReady: false,
   estimatedBytes: null,
   estimating: false,
+  fps: 12,
+  width: 640,
+  vidWidth: 0,    // 0 = original
+  crf: 23,
 });
 
-// Slider values as separate signals for high-frequency updates
-const [fps, setFps] = createSignal(12);
-const [width, setWidth] = createSignal(640);
-const [vidWidth, setVidWidth] = createSignal(0); // 0 = original
-const [crf, setCrf] = createSignal(23);
-
-export {
-  appState, setAppState,
-  fps, setFps,
-  width, setWidth,
-  vidWidth, setVidWidth,
-  crf, setCrf,
-};
+export { appState, setAppState };

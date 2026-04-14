@@ -1,6 +1,7 @@
 import { Component, createSignal, createEffect, For, Show, onCleanup } from 'solid-js';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
 import { CtrlSlider } from '../../shared/ui';
+import { solveBezier } from '../../shared/utils';
 
 // ── Design slider (matches Paper frames) ─────────────────────────────────────
 
@@ -72,25 +73,6 @@ const DesignSlider: Component<DesignSliderProps & { focused?: boolean; onFocus?:
     const x = clientX - rect.left - half;
     const ratio = Math.max(0, Math.min(1, effectiveWidth > 0 ? x / effectiveWidth : 0));
     return min() + ratio * range();
-  };
-
-  // Attempt cubic-bezier interpolation for thumb slide
-  const solveBezier = (x1: number, y1: number, x2: number, y2: number, t: number): number => {
-    // Simple iterative bezier solve — good enough for animation
-    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
-    const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
-    const sampleX = (t: number) => ((ax * t + bx) * t + cx) * t;
-    const sampleY = (t: number) => ((ay * t + by) * t + cy) * t;
-    // Newton's method to find t for given x
-    let guess = t;
-    for (let i = 0; i < 8; i++) {
-      const err = sampleX(guess) - t;
-      if (Math.abs(err) < 1e-6) break;
-      const d = (3 * ax * guess + 2 * bx) * guess + cx;
-      if (Math.abs(d) < 1e-6) break;
-      guess -= err / d;
-    }
-    return sampleY(guess);
   };
 
   const animateTo = (target: number) => {

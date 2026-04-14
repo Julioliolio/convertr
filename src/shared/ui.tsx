@@ -1,22 +1,22 @@
 import { Component, createEffect, onCleanup } from 'solid-js';
-import { ACCENT, BG, MONO } from './tokens';
+import { ACCENT, ACCENT_75, BG, MONO } from './tokens';
+import { solveBezier } from './utils';
 import type { JSX } from 'solid-js';
 
-// ── SVG path constants ────────────────────────────────────────────────────────
+// ── SVG path constants (module-internal, used by the icons below) ───────────
 
 // Play arm corners (79×86 viewBox, same as pause)
-export const PLAY_1  = "M47.405,46.646 L26.634,26.350 L30.787,22.292 L51.558,42.588 Z";
-export const PLAY_2  = "M30.794,62.878 L51.565,42.582 L47.411,38.524 L26.641,58.820 Z";
+const PLAY_1  = "M47.405,46.646 L26.634,26.350 L30.787,22.292 L51.558,42.588 Z";
+const PLAY_2  = "M30.794,62.878 L51.565,42.582 L47.411,38.524 L26.641,58.820 Z";
 // Pause bars — point order matches play arms for a clean morph
-export const PAUSE_1 = "M27.294,62.272 L27.294,22.904 L33.099,22.904 L33.099,62.272 Z";
-export const PAUSE_2 = "M50.904,62.272 L50.904,22.904 L45.099,22.904 L45.099,62.272 Z";
-
+const PAUSE_1 = "M27.294,62.272 L27.294,22.904 L33.099,22.904 L33.099,62.272 Z";
+const PAUSE_2 = "M50.904,62.272 L50.904,22.904 L45.099,22.904 L45.099,62.272 Z";
 // Chevron (used in FormatButton)
-export const CHEVRON_1 = "M47.405,46.646 L26.647,26.352 L30.798,22.294 L51.556,42.588 Z";
-export const CHEVRON_2 = "M30.794,62.878 L51.552,42.584 L47.401,38.526 L26.643,58.820 Z";
-// Minus targets
-export const MINUS_1   = "M59.5,45.9 L19.5,45.9 L19.5,40.1 L59.5,40.1 Z";
-export const MINUS_2   = "M19.5,45.9 L59.5,45.9 L59.5,40.1 L19.5,40.1 Z";
+const CHEVRON_1 = "M47.405,46.646 L26.647,26.352 L30.798,22.294 L51.556,42.588 Z";
+const CHEVRON_2 = "M30.794,62.878 L51.552,42.584 L47.401,38.526 L26.643,58.820 Z";
+// Minus targets (used in FormatButton when open)
+const MINUS_1   = "M59.5,45.9 L19.5,45.9 L19.5,40.1 L59.5,40.1 Z";
+const MINUS_2   = "M19.5,45.9 L59.5,45.9 L59.5,40.1 L19.5,40.1 Z";
 
 // ── PlayPause icon (morphing play ↔ pause via rAF) ──────────────────────────
 
@@ -67,7 +67,7 @@ export const PlayPauseIcon: Component<{ playing: boolean; width?: number; height
       viewBox="0 0 79 86" fill="none" preserveAspectRatio="none"
       style={{ width: `${p.width ?? 16}px`, height: `${p.height ?? 16}px`, 'flex-shrink': '0' }}
     >
-      <rect width="78.1985" height="85.1755" fill="#FC036D" />
+      <rect width="78.1985" height="85.1755" fill={ACCENT} />
       <path ref={ref1!} fill="white" stroke="white" stroke-width="2" />
       <path ref={ref2!} fill="white" stroke="white" stroke-width="2" />
     </svg>
@@ -83,7 +83,7 @@ export const XSvg: Component<{ width?: number; height?: number }> = (p) => (
     preserveAspectRatio="none"
     style={{ width: `${p.width ?? 20}px`, height: `${p.height ?? 22}px`, 'flex-shrink': '0' }}
   >
-    <rect width="78.198" height="87.165" fill="#FC006D" />
+    <rect width="78.198" height="87.165" fill={ACCENT} />
     <rect width="55" height="6" transform="matrix(0.643 -0.766 -0.766 -0.643 23.721 66.577)" fill="#FFFFFF" />
     <rect width="55" height="6" transform="matrix(-0.643 -0.766 -0.766 0.643 59.074 62.721)" fill="#FFFFFF" />
   </svg>
@@ -98,7 +98,7 @@ export const ArrowSvg: Component<{ width?: number; height?: number }> = (p) => (
     preserveAspectRatio="none"
     style={{ width: `${p.width ?? 20}px`, height: `${p.height ?? 22}px`, 'flex-shrink': '0' }}
   >
-    <rect x="0" width="78.198" height="87.165" fill="#FC006D" />
+    <rect x="0" width="78.198" height="87.165" fill={ACCENT} />
     <path d="M64.984 43.583L43.739 64.796L39.49 60.553L53.481 46.582H0.009V40.582H53.481L39.49 26.613L43.739 22.37L64.984 43.583Z" fill="#FFFFFF" />
   </svg>
 );
@@ -121,22 +121,7 @@ export const FormatButton: Component<{
     `M${n[0]},${n[1]} L${n[2]},${n[3]} L${n[4]},${n[5]} L${n[6]},${n[7]} Z`;
   const ease = (t: number) => {
     const { x1 = 0.34, y1 = 1.56, x2 = 0.64, y2 = 1 } = p.spring ?? {};
-    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
-    const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
-    const solveCubic = (target: number) => {
-      let u = target;
-      for (let i = 0; i < 8; i++) {
-        const x = ((ax * u + bx) * u + cx) * u - target;
-        const dx = (3 * ax * u + 2 * bx) * u + cx;
-        if (Math.abs(dx) < 1e-6) break;
-        u -= x / dx;
-      }
-      return u;
-    };
-    if (t === 0) return 0;
-    if (t === 1) return 1;
-    const u = solveCubic(t);
-    return ((ay * u + by) * u + cy) * u;
+    return solveBezier(x1, y1, x2, y2, t);
   };
 
   const CN1 = nums(CHEVRON_1), CN2 = nums(CHEVRON_2);
@@ -222,13 +207,42 @@ export const Chip = (p: { children: JSX.Element; size?: 'base' | 'xs' }) => (
   </span>
 );
 
-// ── Plus cross icon: 20 × 20, two 2px bars ──────────────────────────────────
+// ── Plus-cross icon: 20 × 20, two 2px bars ─────────────────────────────────
+// `Cross` is the in-flow center cross (position: relative, flex-shrink: 0).
+// `CornerCrosshair` is the absolutely-positioned bbox-corner variant that
+// IdleView and EditorView place via a ref + imperative top/left.
+
+const CROSS_ARM_V = { position: 'absolute' as const, left: '9px', top: '0',  width: '2px',  height: '20px', background: ACCENT };
+const CROSS_ARM_H = { position: 'absolute' as const, left: '0',  top: '9px', width: '20px', height: '2px',  background: ACCENT };
 
 export const Cross = () => (
   <div style={{ position: 'relative', 'flex-shrink': '0', width: '20px', height: '20px' }}>
-    <div style={{ position: 'absolute', left: '9px', top: '0', width: '2px', height: '20px', background: ACCENT }} />
-    <div style={{ position: 'absolute', left: '0', top: '9px', width: '20px', height: '2px', background: ACCENT }} />
+    <div style={CROSS_ARM_V} />
+    <div style={CROSS_ARM_H} />
   </div>
+);
+
+export const CornerCrosshair: Component<{ ref?: (el: HTMLDivElement) => void }> = (p) => (
+  <div ref={p.ref} style={{ position: 'absolute', width: '20px', height: '20px' }}>
+    <div style={CROSS_ARM_V} />
+    <div style={CROSS_ARM_H} />
+  </div>
+);
+
+// ── Guide line for the bounding box ─────────────────────────────────────────
+// Direction 'v' → full-height 1px column, 'h' → full-width 1px row.
+
+export const GuideLine: Component<{
+  orientation: 'v' | 'h';
+  ref?: (el: HTMLDivElement) => void;
+}> = (p) => (
+  <div
+    ref={p.ref}
+    style={p.orientation === 'v'
+      ? { position: 'absolute', top: '0', bottom: '0', width: '1px', background: ACCENT_75, 'pointer-events': 'none' }
+      : { position: 'absolute', left: '0', right: '0', height: '1px', background: ACCENT_75, 'pointer-events': 'none' }
+    }
+  />
 );
 
 // ── Playground control slider ────────────────────────────────────────────────

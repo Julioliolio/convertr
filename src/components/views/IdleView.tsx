@@ -21,7 +21,8 @@ function computeIdlePos(vw: number, vh: number) {
   };
 }
 
-import { ACCENT, ACCENT_75, BG } from '../../shared/tokens';
+import { ACCENT, BG } from '../../shared/tokens';
+import { CornerCrosshair, GuideLine } from '../../shared/ui';
 
 type Phase = 'splash' | 'contracting' | 'idle';
 
@@ -232,6 +233,9 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   const armV = { position: 'absolute' as const, left: '9px', top: '0',  width: '2px',  height: '20px', background: ACCENT };
   const armH = { position: 'absolute' as const, left: '0',  top: '9px', width: '20px', height: '2px',  background: ACCENT };
 
+  // Center crosshair (idle-only pulse) uses the local armV/armH so it shares
+  // exact geometry with the corner crosshairs.
+
   return (
     <div
       ref={rootEl}
@@ -264,16 +268,16 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       />
 
       {/* ── Guide lines ───────────────────────────────────────────────────── */}
-      <div ref={vLineL} style={{ position: 'absolute', top: '0', bottom: '0', left: SPLASH.GL, width: '1px', background: ACCENT_75 }} />
-      <div ref={vLineR} style={{ position: 'absolute', top: '0', bottom: '0', left: SPLASH.GR, width: '1px', background: ACCENT_75 }} />
-      <div ref={hLineT} style={{ position: 'absolute', left: '0', right: '0', top: SPLASH.GT,  height: '1px', background: ACCENT_75 }} />
-      <div ref={hLineB} style={{ position: 'absolute', left: '0', right: '0', top: SPLASH.GB,  height: '1px', background: ACCENT_75 }} />
+      <GuideLine orientation="v" ref={el => { vLineL = el; el.style.left = SPLASH.GL; }} />
+      <GuideLine orientation="v" ref={el => { vLineR = el; el.style.left = SPLASH.GR; }} />
+      <GuideLine orientation="h" ref={el => { hLineT = el; el.style.top  = SPLASH.GT; }} />
+      <GuideLine orientation="h" ref={el => { hLineB = el; el.style.top  = SPLASH.GB; }} />
 
       {/* ── Corner crosshairs ─────────────────────────────────────────────── */}
-      <div ref={crossTL} style={{ position: 'absolute', width: '20px', height: '20px' }}><div style={armV} /><div style={armH} /></div>
-      <div ref={crossTR} style={{ position: 'absolute', width: '20px', height: '20px' }}><div style={armV} /><div style={armH} /></div>
-      <div ref={crossBL} style={{ position: 'absolute', width: '20px', height: '20px' }}><div style={armV} /><div style={armH} /></div>
-      <div ref={crossBR} style={{ position: 'absolute', width: '20px', height: '20px' }}><div style={armV} /><div style={armH} /></div>
+      <CornerCrosshair ref={el => crossTL = el} />
+      <CornerCrosshair ref={el => crossTR = el} />
+      <CornerCrosshair ref={el => crossBL = el} />
+      <CornerCrosshair ref={el => crossBR = el} />
 
       {/* ── Center crosshair (idle only) ──────────────────────────────────── */}
       <div style={{ position: 'absolute', width: '20px', height: '20px', top: 'calc(50% - 10px)', left: 'calc(50% - 10px)', opacity: isIdle() ? '1' : '0', transition: 'opacity 0.3s ease' }}>

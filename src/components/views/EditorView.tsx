@@ -1,20 +1,23 @@
-import { Component, createEffect, createSignal, onCleanup, onMount, For, Show, untrack } from 'solid-js';
+import { Component, createEffect, createSignal, onCleanup, onMount, Show, untrack } from 'solid-js';
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
-import Timeline from '../controls/Timeline';
-import ControlPanel from '../layout/ControlPanel';
 import { startConversion } from '../../api/convert';
 import { listenProgress } from '../../api/progress';
 import { uploadFile } from '../../api/upload';
 import { fetchEstimate, cancelEstimate } from '../../api/estimate';
-import { appState, setAppState, fps, width, vidWidth, crf } from '../../state/app';
-import { ACCENT, ACCENT_75, BG, MONO } from '../../shared/tokens';
-import { PlayPauseIcon, XSvg, ArrowSvg, Chip, Cross, FormatButton, CHEVRON_1, CHEVRON_2, MINUS_1, MINUS_2 } from '../../shared/ui';
+import { appState, setAppState } from '../../state/app';
+import { ACCENT, BG } from '../../shared/tokens';
+import { XSvg, Chip, Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
 import LoadingOverlay from '../LoadingOverlay';
-import { fmtDuration, fmtBytes, extractFrames } from '../../shared/utils';
+import { fmtBytes, extractFrames, scrambleText } from '../../shared/utils';
+import ConvertingOverlay from '../editor/ConvertingOverlay';
+import ResultOverlay   from '../editor/ResultOverlay';
+import FormatPicker    from '../editor/FormatPicker';
+import TrimRow         from '../editor/TrimRow';
+import SettingsColumn  from '../editor/SettingsColumn';
 
-// Server-supported formats (lowercase); AVIF not supported server-side
-const FORMATS = ['GIF', 'AVIF', 'MP4', 'MOV', 'WEBM', 'MKV'];
+// Server-supported formats (lowercase server-side)
+const FORMATS = ['GIF', 'AVI', 'MP4', 'MOV', 'WEBM', 'MKV'];
 
 const pct = (v: number, of: number) => (v / of * 100).toFixed(4) + '%';
 
@@ -131,13 +134,13 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     const srcH = props.video.height;
     let bytes: number;
     if (fmt === 'gif') {
-      const w = width() > 0 ? width() : srcW;
+      const w = appState.width > 0 ? appState.width : srcW;
       const h = Math.round(w * srcH / srcW);
-      bytes = (w * h * fps() * dur) / 3;
+      bytes = (w * h * appState.fps * dur) / 3;
     } else {
-      const w = vidWidth() > 0 ? vidWidth() : srcW;
+      const w = appState.vidWidth > 0 ? appState.vidWidth : srcW;
       const h = Math.round(w * srcH / srcW);
-      const bpp = 0.07 * Math.pow(2, (23 - crf()) / 6);
+      const bpp = 0.07 * Math.pow(2, (23 - appState.crf) / 6);
       bytes = (w * h * bpp * 30 * dur) / 8;
       bytes += (128_000 / 8) * dur;
     }
@@ -192,8 +195,9 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     fetchEstimate({
       jobId,
       outputFormat: appState.outputFormat,
-      fps: fps(), width: appState.outputFormat === 'gif' ? width() : vidWidth(),
-      dither: appState.dither, crf: crf(), codec: appState.codec,
+      fps: appState.fps,
+      width: appState.outputFormat === 'gif' ? appState.width : appState.vidWidth,
+      dither: appState.dither, crf: appState.crf, codec: appState.codec,
       trimStart: trimStart(), trimEnd: trimEnd(),
     }).then(bytes => {
       const result = bytes != null ? fmtBytes(bytes) : analyticalSize();
@@ -207,7 +211,11 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   let estimateTimer = 0;
   createEffect(() => {
     const ready = appState.uploadReady; const jobId = appState.uploadJobId;
-    appState.outputFormat; fps(); width(); vidWidth(); crf(); appState.dither; appState.codec;
+    // Re-run whenever any conversion param changes
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    appState.outputFormat; appState.fps; appState.width; appState.vidWidth;
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    appState.crf; appState.dither; appState.codec;
     clearTimeout(estimateTimer);
     if (!ready || !jobId || isDraggingHandle) return;
     estimateTimer = window.setTimeout(runEstimate, 400);
@@ -266,27 +274,13 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const [displayFormat,   setDisplayFormat]   = createSignal(FORMATS[0]);
 
   // ── Format scramble animation ─────────────────────────────────────────────────
-  const FORMAT_SCRAMBLE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let formatScrambleRaf = 0;
   const scrambleFormat = (target: string) => {
-    cancelAnimationFrame(formatScrambleRaf);
-    const totalFrames = 14;
-    const frameMs = 35;
-    let frame = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      if (now - last < frameMs) { formatScrambleRaf = requestAnimationFrame(tick); return; }
-      last = now;
-      frame++;
-      if (frame >= totalFrames) { setDisplayFormat(target); return; }
-      const resolved = Math.floor((frame / totalFrames) * target.length);
-      const scrambled = target.split('').map((ch, i) =>
-        i < resolved ? ch : FORMAT_SCRAMBLE_CHARS[Math.floor(Math.random() * FORMAT_SCRAMBLE_CHARS.length)]
-      ).join('');
-      setDisplayFormat(scrambled);
-      formatScrambleRaf = requestAnimationFrame(tick);
-    };
-    formatScrambleRaf = requestAnimationFrame(tick);
+    formatScrambleRaf = scrambleText(
+      [{ target, setter: setDisplayFormat }],
+      formatScrambleRaf,
+      { frames: 14, frameMs: 35 },
+    );
   };
 
   // Keep appState.outputFormat in sync with local format picker
@@ -450,6 +444,30 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     });
   };
 
+  // ── Run handler (invoked by PROCESS button and ControlPanel's RUN button) ────
+  const handleRun = async () => {
+    if (isConverting()) return;
+    setIsConverting(true);
+    setAppState('converting',  true);
+    setAppState('progress',    0);
+    setAppState('progressMsg', 'Starting...');
+    setResultUrl(null);
+    setResultFilename(null);
+
+    const jobId = await startConversion(trimStart(), trimEnd());
+    if (!jobId) {
+      setIsConverting(false);
+      setAppState('converting', false);
+      return;
+    }
+
+    listenProgress(jobId, (url, filename) => {
+      setResultUrl(url);
+      setResultFilename(filename);
+      setIsConverting(false);
+    });
+  };
+
   // ── Mount ─────────────────────────────────────────────────────────────────────
   onMount(() => {
     setVp({ vw: containerRef.offsetWidth, vh: containerRef.offsetHeight });
@@ -483,32 +501,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       setAppState('uploadJobId', appState.currentJobId);
       setAppState('uploadReady', true);
     }
-
-    // ── convertr:run handler ──────────────────────────────────────────────────
-    const handleRun = async () => {
-      if (isConverting()) return;
-      setIsConverting(true);
-      setAppState('converting', true);
-      setAppState('progress',    0);
-      setAppState('progressMsg', 'Starting...');
-      setResultUrl(null);
-      setResultFilename(null);
-
-      const jobId = await startConversion(trimStart(), trimEnd());
-      if (!jobId) {
-        setIsConverting(false);
-        setAppState('converting', false);
-        return;
-      }
-
-      listenProgress(jobId, (url, filename) => {
-        setResultUrl(url);
-        setResultFilename(filename);
-        setIsConverting(false);
-      });
-    };
-    document.addEventListener('convertr:run', handleRun);
-    onCleanup(() => document.removeEventListener('convertr:run', handleRun));
 
     // ── Video setup ────────────────────────────────────────────────────────────
     videoRef.addEventListener('loadedmetadata', () => {
@@ -548,9 +540,10 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     });
   });
 
-  const crossStyle = { position: 'absolute' as const, width: '20px', height: '20px' };
-  const armV = { position: 'absolute' as const, left: '9px', top: '0',  width: '2px', height: '20px', background: ACCENT };
-  const armH = { position: 'absolute' as const, left: '0',  top: '9px', width: '20px', height: '2px', background: ACCENT };
+  const startEditDuration = () => {
+    setDraftDuration(String(Math.round(trimmedDuration())));
+    setEditingDuration(true);
+  };
 
   return (
     <div ref={containerRef} style={{ position: 'fixed', inset: '0', background: BG, overflow: 'hidden', '-webkit-app-region': 'drag' } as any}>
@@ -577,13 +570,10 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         {/* Intro loading overlay — covers bbox while video loads */}
         <Show when={showIntroOverlay()}>
           <div style={{ position: 'absolute', inset: '0', overflow: 'hidden', 'z-index': '10' }}>
-            <LoadingOverlay
-              onDone={() => setShowIntroOverlay(false)}
-              delay={850}
-            />
+            <LoadingOverlay onDone={() => setShowIntroOverlay(false)} delay={850} />
           </div>
         </Show>
-        {/* Video overlay — padding: 16px (p-4 from Paper) */}
+        {/* Overlay (EXPECTED SIZE + cross + X up top; trim row at bottom) */}
         <div style={{
           position: 'absolute', inset: '0',
           display: 'flex', 'flex-direction': 'column',
@@ -592,249 +582,78 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
           'pointer-events': 'none',
           'box-sizing': 'border-box',
         }}>
-          {/* Top row: EXPECTED SIZE chips | + cross (center) | → arrow (right) */}
           <div style={{ display: 'flex', 'justify-content': 'space-between', 'align-items': 'flex-start', width: '100%' }}>
-            {/* Left: EXPECTED SIZE stacked chips */}
             <div style={{ display: 'flex', 'flex-direction': 'column' }}>
               <Chip>EXPECTED SIZE</Chip>
               <Chip>{displaySize() === '—' ? '—' : `${displaySize()} MB`}</Chip>
             </div>
-            {/* Center: + cross */}
             <Cross />
-            {/* Right: X close (triggers exit) */}
-            <div
-              style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
-              onClick={triggerExit}
-            >
+            <div style={{ cursor: 'pointer', 'pointer-events': 'auto' }} onClick={triggerExit}>
               <XSvg width={20} height={22} />
             </div>
           </div>
-
-          {/* Bottom: play + duration + timeline */}
-          <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px', 'align-self': 'stretch', 'pointer-events': 'auto' }}>
-            <div style={{ position: 'relative', height: '16px', 'align-self': 'stretch' }}>
-              {/* Play/pause — tracks left trim handle */}
-              <div
-                style={{
-                  position: 'absolute',
-                  left: `${(trimStart() / (duration() || 1)) * 100}%`,
-                  height: '16px', display: 'flex', 'align-items': 'center',
-                  cursor: 'pointer',
-                  transition: !dragging() ? 'left 350ms cubic-bezier(1.0,-0.35,0.22,1.15)' : 'none',
-                }}
-                onClick={togglePlay}
-              >
-                <PlayPauseIcon playing={isPlaying()} width={16} height={16} />
-              </div>
-              {/* Duration chip — tracks right trim handle */}
-              <div style={{
-                position: 'absolute',
-                right: `${(1 - trimEnd() / (duration() || 1)) * 100}%`,
-                height: '16px', display: 'flex', 'align-items': 'center',
-                transition: !dragging() ? 'right 350ms cubic-bezier(1.0,-0.35,0.22,1.15)' : 'none',
-              }}>
-                <Show when={editingDuration()} fallback={
-                  <div onClick={() => { setDraftDuration(String(Math.round(trimmedDuration()))); setEditingDuration(true); }} style={{ cursor: 'text' }}>
-                    <Chip size="xs">{fmtDuration(trimmedDuration())}</Chip>
-                  </div>
-                }>
-                  <input
-                    ref={el => { durationInputRef = el; setTimeout(() => el.select(), 0); }}
-                    type="text"
-                    value={draftDuration()}
-                    onInput={e => setDraftDuration(e.currentTarget.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitDuration(); } if (e.key === 'Escape') setEditingDuration(false); }}
-                    onBlur={() => setEditingDuration(false)}
-                    style={{
-                      background: ACCENT, color: BG, border: 'none', outline: 'none',
-                      'font-family': MONO, 'font-size': '12px', 'line-height': '16px',
-                      width: `${Math.max(draftDuration().length, 2) + 1}ch`,
-                      padding: '0', margin: '0', 'caret-color': BG,
-                    }}
-                  />
-                </Show>
-              </div>
-            </div>
-            <Timeline
-              duration={duration()}
-              trimStart={trimStart()}
-              trimEnd={trimEnd()}
-              currentTime={currentTime()}
-              onTrimChange={handleTrimChange}
-              onSeek={handleSeek}
-              onHandleDragStart={() => { isDraggingHandle = true; setDragging(true); }}
-              onHandleDragEnd={() => { isDraggingHandle = false; setDragging(false); runEstimate(); }}
-              frames={frames()}
-              smooth={!dragging()}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* ── Top bar area: always the same DOM structure, height animated open/closed ── */}
-      {/* Button row stays at a stable position (height = topBarHPx) in both states.
-          Format items are always in the DOM — overflow:hidden on the container clips them
-          when closed, and the height animation reveals them smoothly when opening.
-          This avoids any position jump caused by layout differences between states. */}
-      <div ref={topBarEl} style={{ position: 'absolute', 'box-sizing': 'border-box', overflow: 'hidden', '-webkit-app-region': 'no-drag' } as any}>
-        {/* ── Button row: 24px padding on all sides, same position open or closed ── */}
-        <div style={{
-          display: 'flex', 'align-items': 'center', 'justify-content': 'space-between',
-          'padding-inline': '24px',
-          'padding-top': '24px',
-          'padding-bottom': '0px',
-          'box-sizing': 'border-box',
-          'flex-shrink': '0',
-        }}>
-          <FormatButton
-            format={displayFormat()} open={fmtOpen()} onClick={() => setFmtOpen(o => !o)}
-            spring={{ dur: 0.200, x1: 0.006, y1: 0.984, x2: 0.000, y2: 1.109 }}
+          <TrimRow
+            duration={duration()}
+            trimStart={trimStart()}
+            trimEnd={trimEnd()}
+            currentTime={currentTime()}
+            frames={frames()}
+            isPlaying={isPlaying()}
+            dragging={dragging()}
+            editingDuration={editingDuration()}
+            draftDuration={draftDuration()}
+            onTogglePlay={togglePlay}
+            onTrimChange={handleTrimChange}
+            onSeek={handleSeek}
+            onHandleDragStart={() => { isDraggingHandle = true; setDragging(true); }}
+            onHandleDragEnd={() => { isDraggingHandle = false; setDragging(false); runEstimate(); }}
+            onStartEditDuration={startEditDuration}
+            onDraftDurationInput={setDraftDuration}
+            onCommitDuration={commitDuration}
+            onCancelEditDuration={() => setEditingDuration(false)}
+            setDurationInputRef={(el) => { durationInputRef = el; }}
           />
-          <div
-            style={{
-              cursor: 'pointer', display: 'flex', 'align-items': 'center',
-              gap: '4px',
-              'font-family': MONO, 'font-size': '16px', 'line-height': '20px',
-              color: ACCENT, 'user-select': 'none', 'white-space': 'nowrap',
-            }}
-            onClick={() => document.dispatchEvent(new CustomEvent('convertr:run'))}
-          >
-            PROCESS
-            <ArrowSvg width={20} height={22} />
-          </div>
-        </div>
-        {/* ── Format items: always in DOM, revealed by overflow:hidden as height grows ── */}
-        <div style={{
-          'padding-inline': '24px',
-          'padding-top': '4px',
-          'padding-bottom': '0px',
-          display: 'flex', 'flex-direction': 'column',
-          gap: '4px',
-          'pointer-events': fmtOpen() ? 'auto' : 'none',
-        }}>
-          <For each={FORMATS.filter(f => f !== format())}>
-            {(fmt) => (
-              <div
-                style={{ 'font-family': MONO, 'font-size': '16px', 'line-height': '20px', color: ACCENT, cursor: 'pointer', 'user-select': 'none' }}
-                onClick={() => { setFormat(fmt); scrambleFormat(fmt); setFmtOpen(false); }}
-              >
-                {fmt}
-              </div>
-            )}
-          </For>
         </div>
       </div>
 
-      {/* ── VIDEO SETTINGS + ControlPanel ──────────────────────────────────── */}
-      <div
-        ref={settingsEl}
-        style={{ position: 'absolute', '-webkit-app-region': 'no-drag', 'min-width': '200px' } as any}
-      >
-        <span style={{
-          'font-family': MONO, 'font-size': '16px', 'line-height': '20px',
-          color: ACCENT, 'white-space': 'nowrap', display: 'block', 'margin-bottom': '12px',
-        }}>
-          VIDEO SETTINGS
-        </span>
-        <ControlPanel />
+      {/* ── Top bar: format dropdown + PROCESS. Height animated by effects. ── */}
+      <div ref={topBarEl} style={{ position: 'absolute', 'box-sizing': 'border-box', overflow: 'hidden', '-webkit-app-region': 'no-drag' } as any}>
+        <FormatPicker
+          formats={FORMATS}
+          format={format()}
+          displayFormat={displayFormat()}
+          open={fmtOpen()}
+          onToggleOpen={() => setFmtOpen(o => !o)}
+          onSelect={(fmt) => { setFormat(fmt); scrambleFormat(fmt); setFmtOpen(false); }}
+          onRun={handleRun}
+        />
       </div>
 
-      {/* ── Converting overlay (animated grid) ────────────────────────────── */}
+      <SettingsColumn ref={el => settingsEl = el} onRun={handleRun} />
+
       <Show when={isConverting()}>
-        <div style={{
-          position: 'fixed', inset: '0',
-          overflow: 'hidden',
-          'z-index': '100',
-        }}>
-          <LoadingOverlay />
-          {/* Progress info centered on top of animation */}
-          <div style={{
-            position: 'absolute', inset: '0',
-            display: 'flex', 'flex-direction': 'column',
-            'align-items': 'center', 'justify-content': 'center',
-            gap: '12px',
-            'font-family': MONO,
-            'pointer-events': 'none',
-          }}>
-            <span style={{ background: BG, padding: '2px 6px', color: ACCENT, 'font-size': '12px', 'line-height': '16px' }}>
-              {appState.progressMsg || 'Converting...'}
-            </span>
-            <div style={{ width: '200px', height: '2px', background: 'rgba(252,0,109,0.2)', 'border-radius': '1px' }}>
-              <div style={{
-                width: `${appState.progress}%`, height: '100%',
-                background: ACCENT, transition: 'width 0.3s', 'border-radius': '1px',
-              }} />
-            </div>
-            <span style={{ background: BG, padding: '2px 6px', color: ACCENT, 'font-size': '12px', 'line-height': '16px' }}>
-              {Math.round(appState.progress)}%
-            </span>
-          </div>
-        </div>
+        <ConvertingOverlay />
       </Show>
 
-      {/* ── Result overlay ──────────────────────────────────────────────────── */}
       <Show when={resultUrl()}>
-        <div style={{
-          position: 'fixed', inset: '0',
-          background: BG,
-          display: 'flex', 'flex-direction': 'column',
-          'align-items': 'center', 'justify-content': 'center',
-          gap: '16px',
-          'z-index': '100',
-        }}>
-          <Show when={appState.outputFormat === 'gif'} fallback={
-            <video
-              src={resultUrl()!}
-              controls
-              style={{ 'max-width': '80%', 'max-height': '60vh', display: 'block' }}
-            />
-          }>
-            <img
-              src={resultUrl()!}
-              alt="Result"
-              style={{ 'max-width': '80%', 'max-height': '60vh', display: 'block' }}
-            />
-          </Show>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <a
-              href={`/download/${appState.currentJobId}`}
-              download={resultFilename() || 'output'}
-              style={{ 'text-decoration': 'none' }}
-            >
-              <div style={{
-                background: ACCENT, color: BG,
-                'font-family': MONO, 'font-size': '12px', 'line-height': '16px',
-                padding: '8px 16px', cursor: 'pointer',
-              }}>
-                DOWNLOAD
-              </div>
-            </a>
-            <div
-              style={{
-                background: 'transparent', color: ACCENT, border: `1px solid ${ACCENT}`,
-                'font-family': MONO, 'font-size': '12px', 'line-height': '16px',
-                padding: '8px 16px', cursor: 'pointer', 'box-sizing': 'border-box',
-              }}
-              onClick={() => { setResultUrl(null); setResultFilename(null); setAppState('progress', 0); }}
-            >
-              CLOSE
-            </div>
-          </div>
-        </div>
+        <ResultOverlay
+          url={resultUrl()!}
+          filename={resultFilename()}
+          onClose={() => { setResultUrl(null); setResultFilename(null); setAppState('progress', 0); }}
+        />
       </Show>
 
       {/* ── Guide lines ─────────────────────────────────────────────────────── */}
-      <div ref={vLineL} style={{ position: 'absolute', top: '0', bottom: '0', width: '1px', background: ACCENT_75, 'pointer-events': 'none' }} />
-      <div ref={vLineR} style={{ position: 'absolute', top: '0', bottom: '0', width: '1px', background: ACCENT_75, 'pointer-events': 'none' }} />
-      <div ref={hLineT} style={{ position: 'absolute', left: '0', right: '0', height: '1px', background: ACCENT_75, 'pointer-events': 'none' }} />
-      <div ref={hLineB} style={{ position: 'absolute', left: '0', right: '0', height: '1px', background: ACCENT_75, 'pointer-events': 'none' }} />
+      <GuideLine orientation="v" ref={el => vLineL = el} />
+      <GuideLine orientation="v" ref={el => vLineR = el} />
+      <GuideLine orientation="h" ref={el => hLineT = el} />
+      <GuideLine orientation="h" ref={el => hLineB = el} />
 
       {/* ── Corner crosshairs ───────────────────────────────────────────────── */}
-      <div ref={crossTL} style={crossStyle}><div style={armV} /><div style={armH} /></div>
-      <div ref={crossTR} style={crossStyle}><div style={armV} /><div style={armH} /></div>
-      <div ref={crossBL} style={crossStyle}><div style={armV} /><div style={armH} /></div>
-      <div ref={crossBR} style={crossStyle}><div style={armV} /><div style={armH} /></div>
-
+      <CornerCrosshair ref={el => crossTL = el} />
+      <CornerCrosshair ref={el => crossTR = el} />
+      <CornerCrosshair ref={el => crossBL = el} />
+      <CornerCrosshair ref={el => crossBR = el} />
     </div>
   );
 };

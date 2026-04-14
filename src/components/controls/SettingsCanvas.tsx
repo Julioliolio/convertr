@@ -2,39 +2,9 @@ import { Component, createSignal, createEffect, For, Show, onCleanup } from 'sol
 import { appState, setAppState } from '../../state/app';
 import { ACCENT, ACCENT_75, BG, MONO } from '../../shared/tokens';
 import { FormatButton } from '../../shared/ui';
+import { scrambleText } from '../../shared/utils';
 
-// ── Scramble animation utility ──────────────────────────────────────────────
-const SCRAMBLE_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
-function scrambleText(
-  targets: { target: string; setter: (v: string) => void }[],
-  prevRaf: number,
-  opts: { frames?: number; frameMs?: number } = {},
-): number {
-  cancelAnimationFrame(prevRaf);
-  const totalFrames = opts.frames ?? 8;
-  const frameMs = opts.frameMs ?? 25;
-  let frame = 0;
-  let last = performance.now();
-  let rafId = 0;
-  const tick = (now: number) => {
-    if (now - last < frameMs) { rafId = requestAnimationFrame(tick); return; }
-    last = now;
-    frame++;
-    if (frame >= totalFrames) {
-      for (const t of targets) t.setter(t.target);
-      return;
-    }
-    for (const t of targets) {
-      const resolved = Math.floor((frame / totalFrames) * t.target.length);
-      t.setter(t.target.split('').map((ch, i) =>
-        i < resolved ? ch : ch === ' ' ? ' ' : SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)]
-      ).join(''));
-    }
-    rafId = requestAnimationFrame(tick);
-  };
-  rafId = requestAnimationFrame(tick);
-  return rafId;
-}
+const DITHER_SCRAMBLE_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
 const DITHER_OPTIONS = [
   { value: 'sierra2_4a', label: 'sierra42a', title: 'best balance', desc: 'smooth gradients with small file size. good default for most videos.' },
@@ -132,7 +102,7 @@ const SettingsCanvas: Component<{
     tipScrambleRaf = scrambleText([
       { target: tip.title, setter: setDisplayTitle },
       { target: tip.desc, setter: setDisplayDesc },
-    ], tipScrambleRaf, { frames: 10, frameMs: 20 });
+    ], tipScrambleRaf, { frames: 10, frameMs: 20, chars: DITHER_SCRAMBLE_CHARS });
   };
 
   createEffect(() => {
@@ -223,7 +193,11 @@ const SettingsCanvas: Component<{
   const [displayDither, setDisplayDither] = createSignal(currentDither().label);
   let scrambleRaf = 0;
   const scrambleTo = (target: string) => {
-    scrambleRaf = scrambleText([{ target, setter: setDisplayDither }], scrambleRaf);
+    scrambleRaf = scrambleText(
+      [{ target, setter: setDisplayDither }],
+      scrambleRaf,
+      { frames: 8, frameMs: 25, chars: DITHER_SCRAMBLE_CHARS },
+    );
   };
   onCleanup(() => cancelAnimationFrame(scrambleRaf));
 
