@@ -1,3 +1,51 @@
+// ── Cell type (shared by LoadingOverlay & playground) ───────────────────────
+export type CellInfo = { row: number; col: number };
+
+// ── Farthest-point sampling ─────────────────────────────────────────────────
+export function farthestPointSample(rows: number, cols: number, count: number): CellInfo[] {
+  const allCells: CellInfo[] = [];
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++)
+      allCells.push({ row: r, col: c });
+
+  const n = Math.min(count, allCells.length);
+  if (n === 0) return [];
+
+  const picked: CellInfo[] = [];
+  const remaining = [...allCells];
+
+  const firstIdx = Math.floor(Math.random() * remaining.length);
+  picked.push(remaining.splice(firstIdx, 1)[0]);
+
+  const minDist = new Float64Array(remaining.length);
+  for (let i = 0; i < remaining.length; i++) {
+    const dr = remaining[i].row - picked[0].row;
+    const dc = remaining[i].col - picked[0].col;
+    minDist[i] = dr * dr + dc * dc;
+  }
+
+  while (picked.length < n && remaining.length > 0) {
+    let bestIdx = 0, bestDist = minDist[0];
+    for (let i = 1; i < remaining.length; i++) {
+      if (minDist[i] > bestDist) { bestDist = minDist[i]; bestIdx = i; }
+    }
+    const chosen = remaining[bestIdx];
+    picked.push(chosen);
+    remaining.splice(bestIdx, 1);
+
+    const newMinDist = new Float64Array(remaining.length);
+    for (let i = 0; i < remaining.length; i++) {
+      const old = i < bestIdx ? minDist[i] : minDist[i + 1];
+      const dr = remaining[i].row - chosen.row;
+      const dc = remaining[i].col - chosen.col;
+      newMinDist[i] = Math.min(old, dr * dr + dc * dc);
+    }
+    minDist.set(newMinDist);
+  }
+
+  return picked;
+}
+
 // ── Symbol types ────────────────────────────────────────────────────────────
 export type SymbolType = 'cross' | 'dot' | 'vline' | 'hash' | 'diag-r' | 'diag-l' | 'star' | 'ring' | 'square';
 

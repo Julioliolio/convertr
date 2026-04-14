@@ -1,19 +1,7 @@
 import { Component, createSignal, createEffect, onCleanup, For } from 'solid-js';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
 import { drawSymbol, ALL_SYMBOLS, type SymbolType } from '../../shared/symbols';
-
-// ── CtrlSlider ──────────────────────────────────────────────────────────────
-const CtrlSlider: Component<{
-  label: string; value: number; min: number; max: number;
-  step?: number; onChange: (v: number) => void; suffix?: string; accent?: string;
-}> = (p) => (
-  <div style={{ display: 'flex', 'align-items': 'center', gap: '8px', 'font-family': MONO, 'font-size': '11px', color: '#555' }}>
-    <span style={{ width: '90px', 'flex-shrink': '0' }}>{p.label}</span>
-    <input type="range" min={p.min} max={p.max} step={p.step ?? 1} value={p.value}
-      onInput={e => p.onChange(Number(e.currentTarget.value))} style={{ width: '100px' }} />
-    <span style={{ width: '50px', 'text-align': 'right', color: p.accent ?? '#1a1a8a' }}>{p.value}{p.suffix ?? ''}</span>
-  </div>
-);
+import { CtrlSlider } from '../../shared/ui';
 
 // ── hex → rgba helper ───────────────────────────────────────────────────────
 function hexToRgba(hex: string, alpha: number): string {

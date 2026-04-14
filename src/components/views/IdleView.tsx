@@ -25,32 +25,6 @@ import { ACCENT, ACCENT_75, BG } from '../../shared/tokens';
 
 type Phase = 'splash' | 'contracting' | 'idle';
 
-// ── Logo SVG (asterisk) ───────────────────────────────────────────────────────
-const Logo: Component<{ visible: boolean; dur: number; ease: string }> = (props) => (
-  <svg
-    width="200" height="197" viewBox="0 0 200 197" fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    style={{
-      position: 'absolute',
-      width: '340px', height: '335px',
-      left: '50%', top: '50%',
-      translate: '-50% -50%',
-      'transform-origin': 'center center',
-      transform: props.visible ? 'scale(1)' : 'scale(0)',
-      opacity: props.visible ? '1' : '0',
-      transition: `transform ${props.dur}s ${props.ease}, opacity ${props.dur}s ${props.ease}`,
-      'pointer-events': 'none',
-    }}
-  >
-    <rect x="108.272" y="24.496"  width="32.585" height="91.585" transform="rotate(21.776 108.272 24.496)"  fill={ACCENT} />
-    <rect x="150.186" y="70.291"  width="32.585" height="72.928" transform="rotate(74.646 150.186 70.291)"  fill={ACCENT} />
-    <rect x="113.537" y="94.55"   width="32.585" height="72.928" transform="rotate(92.851 113.537 94.55)"   fill={ACCENT} />
-    <rect x="38.787"  y="50.697"  width="32.585" height="93.501" transform="rotate(-35.87 38.787 50.697)"   fill={ACCENT} />
-    <rect x="90.667"  y="119.914" width="32.585" height="69.201" transform="rotate(-26.582 90.667 119.914)" fill={ACCENT} />
-    <rect x="72.995"  y="165.832" width="32.585" height="58.34"  transform="rotate(-149.134 72.995 165.832)" fill={ACCENT} />
-  </svg>
-);
-
 // ── Tracks whether the intro has already played this session ──────────────────
 // Module-level so it survives IdleView unmount/remount (e.g. after pressing X),
 // but resets on a full page reload (i.e. fresh app launch).
@@ -281,10 +255,9 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
           left: SPLASH.GL, top: SPLASH.GT,
           width: `calc(${SPLASH.GR} - ${SPLASH.GL})`,
           height: `calc(${SPLASH.GB} - ${SPLASH.GT})`,
-          'background-image': 'radial-gradient(circle, rgba(252,0,109,0.5) 0.75px, transparent 0.75px)',
+          'background-image': 'radial-gradient(circle, rgba(252,0,109,0.5) 1px, transparent 1px)',
           'background-size': '32px 32px',
           'background-position': '50% 50%',
-          'background-attachment': 'fixed',
           opacity: '1',
           'pointer-events': 'none',
         }}
@@ -306,8 +279,6 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       <div style={{ position: 'absolute', width: '20px', height: '20px', top: 'calc(50% - 10px)', left: 'calc(50% - 10px)', opacity: isIdle() ? '1' : '0', transition: 'opacity 0.3s ease' }}>
         <div style={armV} /><div style={armH} />
       </div>
-
-      {/* ── Logo (removed – dotted background replaces splash logo) ─────── */}
 
       {/* ── Helper text ───────────────────────────────────────────────────── */}
       <div style={{

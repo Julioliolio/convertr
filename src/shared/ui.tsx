@@ -230,3 +230,16 @@ export const Cross = () => (
     <div style={{ position: 'absolute', left: '0', top: '9px', width: '20px', height: '2px', background: ACCENT }} />
   </div>
 );
+
+// ── Playground control slider ────────────────────────────────────────────────
+export const CtrlSlider: Component<{
+  label: string; value: number; min: number; max: number;
+  step?: number; onChange: (v: number) => void; suffix?: string; accent?: string;
+}> = (p) => (
+  <div style={{ display: 'flex', 'align-items': 'center', gap: '8px', 'font-family': MONO, 'font-size': '11px', color: '#555' }}>
+    <span style={{ width: '90px', 'flex-shrink': '0' }}>{p.label}</span>
+    <input type="range" min={p.min} max={p.max} step={p.step ?? 1} value={p.value}
+      onInput={e => p.onChange(Number(e.currentTarget.value))} style={{ width: '100px' }} />
+    <span style={{ width: '50px', 'text-align': 'right', color: p.accent ?? '#1a1a8a' }}>{p.value}{p.suffix ?? ''}</span>
+  </div>
+);

@@ -1,6 +1,7 @@
 import { Component, createSignal, createEffect, onCleanup, onMount, For } from 'solid-js';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
-import { drawSymbol, ALL_SYMBOLS, type SymbolType } from '../../shared/symbols';
+import { drawSymbol, ALL_SYMBOLS, farthestPointSample, type SymbolType, type CellInfo } from '../../shared/symbols';
+import { CtrlSlider } from '../../shared/ui';
 
 // ── Synthetic test video ─────────────────────────────────────────────────────
 function createTestVideo(): Promise<string> {
@@ -37,67 +38,6 @@ const ORIENTATIONS = {
   landscape: { boxW: 560, boxH: Math.round(560 * 9 / 16) },
   portrait:  { boxW: 315, boxH: 560 },
 } as const;
-
-// ── Cell type ───────────────────────────────────────────────────────────────
-type CellInfo = { row: number; col: number };
-
-// ── Farthest-point sampling ─────────────────────────────────────────────────
-function selectLingerCells(gRows: number, gCols: number, count: number): CellInfo[] {
-  const allCells: CellInfo[] = [];
-  for (let r = 0; r < gRows; r++)
-    for (let c = 0; c < gCols; c++)
-      allCells.push({ row: r, col: c });
-
-  const n = Math.min(count, allCells.length);
-  if (n === 0) return [];
-
-  const picked: CellInfo[] = [];
-  const remaining = [...allCells];
-
-  const firstIdx = Math.floor(Math.random() * remaining.length);
-  picked.push(remaining.splice(firstIdx, 1)[0]);
-
-  const minDist = new Float64Array(remaining.length);
-  for (let i = 0; i < remaining.length; i++) {
-    const dr = remaining[i].row - picked[0].row;
-    const dc = remaining[i].col - picked[0].col;
-    minDist[i] = dr * dr + dc * dc;
-  }
-
-  while (picked.length < n && remaining.length > 0) {
-    let bestIdx = 0, bestDist = minDist[0];
-    for (let i = 1; i < remaining.length; i++) {
-      if (minDist[i] > bestDist) { bestDist = minDist[i]; bestIdx = i; }
-    }
-    const chosen = remaining[bestIdx];
-    picked.push(chosen);
-    remaining.splice(bestIdx, 1);
-
-    const newMinDist = new Float64Array(remaining.length);
-    for (let i = 0; i < remaining.length; i++) {
-      const old = i < bestIdx ? minDist[i] : minDist[i + 1];
-      const dr = remaining[i].row - chosen.row;
-      const dc = remaining[i].col - chosen.col;
-      newMinDist[i] = Math.min(old, dr * dr + dc * dc);
-    }
-    minDist.set(newMinDist);
-  }
-
-  return picked;
-}
-
-// ── CtrlSlider ──────────────────────────────────────────────────────────────
-const CtrlSlider: Component<{
-  label: string; value: number; min: number; max: number;
-  step?: number; onChange: (v: number) => void; suffix?: string; accent?: string;
-}> = (p) => (
-  <div style={{ display: 'flex', 'align-items': 'center', gap: '8px', 'font-family': MONO, 'font-size': '11px', color: '#555' }}>
-    <span style={{ width: '90px', 'flex-shrink': '0' }}>{p.label}</span>
-    <input type="range" min={p.min} max={p.max} step={p.step ?? 1} value={p.value}
-      onInput={e => p.onChange(Number(e.currentTarget.value))} style={{ width: '100px' }} />
-    <span style={{ width: '50px', 'text-align': 'right', color: p.accent ?? '#1a1a8a' }}>{p.value}{p.suffix ?? ''}</span>
-  </div>
-);
 
 // ── Main component ──────────────────────────────────────────────────────────
 const LoadingPlayground: Component = () => {
@@ -139,7 +79,7 @@ const LoadingPlayground: Component = () => {
     const ctx = canvasRef.getContext('2d')!;
     ctx.scale(dpr, dpr);
 
-    lingerCells = selectLingerCells(gridRows(), gridCols(), lingerCount());
+    lingerCells = farthestPointSample(gridRows(), gridCols(), lingerCount());
     startTime = performance.now();
     setPlaying(true);
   }

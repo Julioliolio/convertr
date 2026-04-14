@@ -1,5 +1,5 @@
 import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
-import { drawSymbol, type SymbolType } from '../shared/symbols';
+import { drawSymbol, farthestPointSample, type SymbolType, type CellInfo } from '../shared/symbols';
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const CELL_SIZE     = 24;
@@ -10,57 +10,9 @@ const LINGER_COUNT  = 2;
 const LINGER_DUR    = 0.5;    // seconds
 const FLICKER_SPEED = 75;     // ms per flicker toggle
 
-// ── Types ──────────────────────────────────────────────────────────────────
-type CellInfo = { row: number; col: number };
-
 // ── Tile dimensions (in cells) — pattern repeats across the canvas ─────────
 const TILE_COLS = 12;
 const TILE_ROWS = 8;
-
-// ── Farthest-point sampling within a tile ──────────────────────────────────
-function sampleTilePattern(count: number): CellInfo[] {
-  const allCells: CellInfo[] = [];
-  for (let r = 0; r < TILE_ROWS; r++)
-    for (let c = 0; c < TILE_COLS; c++)
-      allCells.push({ row: r, col: c });
-
-  const n = Math.min(count, allCells.length);
-  if (n === 0) return [];
-
-  const picked: CellInfo[] = [];
-  const remaining = [...allCells];
-
-  const firstIdx = Math.floor(Math.random() * remaining.length);
-  picked.push(remaining.splice(firstIdx, 1)[0]);
-
-  const minDist = new Float64Array(remaining.length);
-  for (let i = 0; i < remaining.length; i++) {
-    const dr = remaining[i].row - picked[0].row;
-    const dc = remaining[i].col - picked[0].col;
-    minDist[i] = dr * dr + dc * dc;
-  }
-
-  while (picked.length < n && remaining.length > 0) {
-    let bestIdx = 0, bestDist = minDist[0];
-    for (let i = 1; i < remaining.length; i++) {
-      if (minDist[i] > bestDist) { bestDist = minDist[i]; bestIdx = i; }
-    }
-    const chosen = remaining[bestIdx];
-    picked.push(chosen);
-    remaining.splice(bestIdx, 1);
-
-    const newMinDist = new Float64Array(remaining.length);
-    for (let i = 0; i < remaining.length; i++) {
-      const old = i < bestIdx ? minDist[i] : minDist[i + 1];
-      const dr = remaining[i].row - chosen.row;
-      const dc = remaining[i].col - chosen.col;
-      newMinDist[i] = Math.min(old, dr * dr + dc * dc);
-    }
-    minDist.set(newMinDist);
-  }
-
-  return picked;
-}
 
 // ── Tile the pattern across the full canvas ────────────────────────────────
 function buildTiledCells(gRows: number, gCols: number, pattern: CellInfo[]): CellInfo[] {
@@ -134,7 +86,7 @@ const LoadingOverlay: Component<{
 
     const gCols = Math.ceil(vw / CELL_SIZE);
     const gRows = Math.ceil(vh / CELL_SIZE);
-    const tilePattern = sampleTilePattern(LINGER_COUNT);
+    const tilePattern = farthestPointSample(TILE_ROWS, TILE_COLS, LINGER_COUNT);
     lingerCells = buildTiledCells(gRows, gCols, tilePattern);
 
     startTime = performance.now();
