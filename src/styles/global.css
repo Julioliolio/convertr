@@ -5,3 +5,19 @@
   from { clip-path: inset(0 100% 0 0); }
   to   { clip-path: inset(0 0%   0 0); }
 }
+
+/* ── Settings dial — state crossfade ──────────────────────────────────────
+   Closed and open states are stacked and crossfaded on toggle. The hand
+   sweep animation is handled entirely via the Web Animations API in
+   ui.tsx (element.animate), so no CSS keyframes are needed. */
+.settings-dial__state {
+  transition: opacity 180ms ease;
+}
+
+/* Rotation origin for the hand — sits at the circle's center in viewBox
+   units. transform-box: view-box lets transform-origin use viewBox coords
+   rather than the path's own bounding box. */
+.settings-dial__hand {
+  transform-box: view-box;
+  transform-origin: 39.1px 43.6px;
+}

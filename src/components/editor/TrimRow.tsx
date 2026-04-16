@@ -37,6 +37,7 @@ const TrimRow: Component<{
       <div style={{ position: 'relative', height: '16px', 'align-self': 'stretch' }}>
         {/* Play/pause — tracks left trim handle */}
         <div
+          title={p.isPlaying ? 'Pause' : 'Play'}
           style={{
             position: 'absolute',
             left: `${(p.trimStart / (p.duration || 1)) * 100}%`,
@@ -58,7 +59,7 @@ const TrimRow: Component<{
           <Show
             when={p.editingDuration}
             fallback={
-              <div onClick={p.onStartEditDuration} style={{ cursor: 'text' }}>
+              <div title="Edit duration" onClick={p.onStartEditDuration} style={{ cursor: 'text' }}>
                 <Chip size="xs">{fmtDuration(trimmed())}</Chip>
               </div>
             }

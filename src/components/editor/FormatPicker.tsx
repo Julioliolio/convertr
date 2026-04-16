@@ -28,6 +28,7 @@ const FormatPicker: Component<{
       <FormatButton
         format={p.displayFormat} open={p.open} onClick={p.onToggleOpen}
         spring={FORMAT_SPRING}
+        title="Output format"
       />
       <div
         style={{

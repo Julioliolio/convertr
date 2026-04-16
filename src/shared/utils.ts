@@ -80,7 +80,7 @@ export function scrambleText(
 
 // ── Cubic bezier solver ───────────────────────────────────────────────────────
 // Maps t∈[0,1] through a cubic-bezier(x1,y1,x2,y2) curve. Used by FormatButton
-// for path-morph easing and by the bezier-curve editor in SliderPlayground.
+// for path-morph easing.
 
 export function solveBezier(x1: number, y1: number, x2: number, y2: number, t: number): number {
   if (t <= 0) return 0;

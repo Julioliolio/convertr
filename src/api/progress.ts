@@ -1,10 +1,11 @@
-import { setAppState } from '../state/app';
+import { appState, setAppState } from '../state/app';
 
 let currentSSE: EventSource | null = null;
 
 export function listenProgress(
   jobId: string,
   onComplete: (resultUrl: string, filename: string) => void,
+  onError?: () => void,
 ): void {
   stopProgress();
 
@@ -15,10 +16,10 @@ export function listenProgress(
     try {
       const data = JSON.parse(event.data);
 
-      if (data.progress !== undefined) {
+      if (data.progress !== undefined && data.progress !== appState.progress) {
         setAppState('progress', data.progress);
       }
-      if (data.message) {
+      if (data.message && data.message !== appState.progressMsg) {
         setAppState('progressMsg', data.message);
       }
       if (data.done) {
@@ -35,6 +36,7 @@ export function listenProgress(
         currentSSE = null;
         setAppState('converting', false);
         setAppState('progressMsg', `Error: ${data.message || 'Unknown error'}`);
+        onError?.();
       }
     } catch {
       // ignore parse errors
@@ -44,6 +46,8 @@ export function listenProgress(
   sse.onerror = () => {
     sse.close();
     currentSSE = null;
+    setAppState('converting', false);
+    onError?.();
   };
 }
 

@@ -1,5 +1,5 @@
 import { Component, createSignal } from 'solid-js';
-import SettingsCanvas from '../controls/SettingsCanvas';
+import VideoSettings from '../controls/VideoSettings';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
 
 // NOTE: The batch processing code lives in `controls/BatchCanvas.tsx` and
@@ -11,6 +11,7 @@ const CanvasPlayground: Component = () => {
   const [canvasWidth, setCanvasWidth] = createSignal(597);
   const [videoSrc, setVideoSrc] = createSignal<string | null>('/dev-mock.mp4');
   const [videoEl, setVideoEl] = createSignal<HTMLVideoElement | undefined>();
+  const [isPortrait, setIsPortrait] = createSignal(false);
   let fileInputRef!: HTMLInputElement;
 
   const handleFile = (e: Event) => {
@@ -33,6 +34,7 @@ const CanvasPlayground: Component = () => {
       <div style={{
         display: 'flex', 'flex-direction': 'column', gap: '16px',
         width: `${canvasWidth()}px`, 'flex-shrink': '0',
+        height: 'calc(100vh - 80px)',
       }}>
         {/* Hidden video for frame extraction — rendered first so the ref is available */}
         <video
@@ -43,7 +45,7 @@ const CanvasPlayground: Component = () => {
           style={{ display: 'none' }}
           onLoadedData={(e) => { (e.target as HTMLVideoElement).currentTime = 1; }}
         />
-        <SettingsCanvas videoEl={videoEl()} />
+        <VideoSettings videoEl={videoEl()} open={true} isPortrait={isPortrait()} />
       </div>
 
       {/* Controls */}
@@ -61,6 +63,33 @@ const CanvasPlayground: Component = () => {
             style={{ width: '140px' }}
           />
           <span style={{ width: '40px', 'text-align': 'right', color: ACCENT }}>{canvasWidth()}px</span>
+        </div>
+
+        <div style={{ 'font-size': '10px', color: '#333', 'letter-spacing': '0.08em', 'margin-top': '12px' }}>ORIENTATION</div>
+
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            onClick={() => setIsPortrait(false)}
+            style={{
+              background: !isPortrait() ? ACCENT : 'transparent',
+              border: `1px solid #2a2a2a`,
+              color: !isPortrait() ? BG : '#555', cursor: 'pointer', padding: '4px 10px',
+              'font-family': MONO, 'font-size': '10px',
+            }}
+          >
+            landscape
+          </button>
+          <button
+            onClick={() => setIsPortrait(true)}
+            style={{
+              background: isPortrait() ? ACCENT : 'transparent',
+              border: `1px solid #2a2a2a`,
+              color: isPortrait() ? BG : '#555', cursor: 'pointer', padding: '4px 10px',
+              'font-family': MONO, 'font-size': '10px',
+            }}
+          >
+            portrait
+          </button>
         </div>
 
         <div style={{ 'font-size': '10px', color: '#333', 'letter-spacing': '0.08em', 'margin-top': '12px' }}>VIDEO SOURCE</div>

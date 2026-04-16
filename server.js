@@ -58,7 +58,7 @@ function broadcast(jobId, data) {
 }
 
 function cleanup(jobId, delay = 0) {
-  setTimeout(() => {
+  return setTimeout(() => {
     const job = jobs.get(jobId);
     if (!job) return;
     [job.inputPath, job.palettePath, job.outputPath].forEach(f => {
@@ -301,6 +301,7 @@ app.post('/convert-fetched', async (req, res) => {
   job.outputPath = outputPath;
   job.outputFormat = outputFormat;
   if (job.uploadTimer) { clearTimeout(job.uploadTimer); job.uploadTimer = null; }
+  if (job.conversionTimer) { clearTimeout(job.conversionTimer); job.conversionTimer = null; }
 
   res.json({ jobId });
 
@@ -379,8 +380,7 @@ function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, op
           downloadUrl: `/download/${jobId}`, inputSize, outputSize, outputFormat,
         });
 
-        [inputPath, palettePath].forEach(f => { try { fs.unlinkSync(f); } catch {} });
-        cleanup(jobId, CONVERSION_CLEANUP_MS);
+        job.conversionTimer = cleanup(jobId, CONVERSION_CLEANUP_MS);
       } catch (err) {
         console.error(err);
         broadcast(jobId, { error: true, message: err.message });
@@ -425,8 +425,7 @@ function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, op
           downloadUrl: `/download/${jobId}`, inputSize, outputSize, outputFormat,
         });
 
-        try { fs.unlinkSync(inputPath); } catch {}
-        cleanup(jobId, CONVERSION_CLEANUP_MS);
+        job.conversionTimer = cleanup(jobId, CONVERSION_CLEANUP_MS);
       } catch (err) {
         console.error(err);
         broadcast(jobId, { error: true, message: err.message });

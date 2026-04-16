@@ -1,4 +1,4 @@
-// ── Cell type (shared by LoadingOverlay & playground) ───────────────────────
+// ── Cell type ───────────────────────────────────────────────────────────────
 export type CellInfo = { row: number; col: number };
 
 // ── Farthest-point sampling ─────────────────────────────────────────────────
@@ -48,18 +48,6 @@ export function farthestPointSample(rows: number, cols: number, count: number): 
 
 // ── Symbol types ────────────────────────────────────────────────────────────
 export type SymbolType = 'cross' | 'dot' | 'vline' | 'hash' | 'diag-r' | 'diag-l' | 'star' | 'ring' | 'square';
-
-export const ALL_SYMBOLS: { id: SymbolType; label: string }[] = [
-  { id: 'cross',  label: '+' },
-  { id: 'dot',    label: '.' },
-  { id: 'vline',  label: '|' },
-  { id: 'hash',   label: '#' },
-  { id: 'diag-r', label: '/' },
-  { id: 'diag-l', label: '\\' },
-  { id: 'star',   label: '*' },
-  { id: 'ring',   label: 'o' },
-  { id: 'square', label: '□' },
-];
 
 // ── Canvas drawing helper ──────────────────────────────────────────────────
 export function drawSymbol(

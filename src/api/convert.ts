@@ -21,7 +21,7 @@ export async function startConversion(trimStart?: number, trimEnd?: number): Pro
 
   const commonBody = {
     outputFormat: appState.outputFormat,
-    fps:          appState.fps,
+    fps:          Math.round(appState.fps),
     width:        widthArg,
     dither:       appState.dither,
     crf:          appState.crf,
@@ -54,7 +54,7 @@ export async function startConversion(trimStart?: number, trimEnd?: number): Pro
       const form = new FormData();
       form.append('video', file!);
       form.append('outputFormat', appState.outputFormat);
-      form.append('fps',    String(appState.fps));
+      form.append('fps',    String(Math.round(appState.fps)));
       form.append('dither', appState.dither);
       form.append('codec',  appState.codec);
       form.append('crf',    String(appState.crf));

@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, For, Show, onCleanup } from 'solid-js';
+import { Component, createSignal, createEffect, For, Show, onCleanup, onMount } from 'solid-js';
 import { appState, setAppState } from '../../state/app';
 import { ACCENT, ACCENT_75, BG, MONO } from '../../shared/tokens';
 import { FormatButton } from '../../shared/ui';
@@ -88,6 +88,7 @@ const PREVIEW_W = 200; // world-space width of video at zoom=1
 
 const SettingsCanvas: Component<{
   videoEl?: HTMLVideoElement;
+  isPortrait?: boolean;
 }> = (props) => {
   const [ditherOpen, setDitherOpen] = createSignal(false);
   type Tip = { title: string; desc: string } | null;
@@ -139,11 +140,55 @@ const SettingsCanvas: Component<{
   const [zoom, setZoom] = createSignal(1);
   const [dragging, setDragging] = createSignal(false);
   const [animate, setAnimate] = createSignal(false);
+  const [containerSize, setContainerSize] = createSignal({ w: 0, h: 0 });
   let dragStart = { x: 0, y: 0, px: 0, py: 0 };
   let didDrag = false;
 
+  // "Contain" fit: scale so the whole preview fits inside the container with
+  // a small margin on all sides. Picks the smaller dimension-scale so neither
+  // axis overflows — the opposing axis gets letterboxed/pillarboxed by the
+  // dotted background. Leaves visible breathing room around the preview so
+  // the user can see the full frame at once.
+  const fitToContainer = () => {
+    const { w: cw, h: ch } = containerSize();
+    const pw = previewW(), ph = previewH();
+    if (!cw || !ch || !pw || !ph) return;
+    const pad = 32;
+    const widthScale  = (cw - pad) / pw;
+    const heightScale = (ch - pad) / ph;
+    const scale = Math.min(widthScale, heightScale) * 0.6;
+    setPan({ x: 0, y: 0 });
+    setZoom(Math.max(0.1, Math.min(scale, 20)));
+  };
+
+  onMount(() => {
+    const ro = new ResizeObserver(() => {
+      setContainerSize({ w: containerRef.clientWidth, h: containerRef.clientHeight });
+    });
+    ro.observe(containerRef);
+    onCleanup(() => ro.disconnect());
+  });
+
+  // Auto-fit whenever the preview dimensions OR the container dimensions
+  // change — but only until the user has manually pan/zoomed. This matters
+  // for the common flow where the video loads while the settings panel is
+  // still hidden (container 0×0) and only later animates to its full size:
+  // a preview-dim-only trigger would fire too early (container still 0)
+  // and never refit once the panel finally grew. Once the user interacts
+  // with pan/zoom, we stop auto-fitting so we don't stomp on their view.
+  // The ⊙ refit button re-arms this auto-fit.
+  let userAdjusted = false;
+  createEffect(() => {
+    const pw = previewW();
+    const ph = previewH();
+    const { w: cw, h: ch } = containerSize();
+    if (pw <= 0 || ph <= 0 || cw <= 0 || ch <= 0) return;
+    if (!userAdjusted) fitToContainer();
+  });
+
   const handleWheel = (e: WheelEvent) => {
     e.preventDefault();
+    userAdjusted = true;
 
     if (e.ctrlKey || e.metaKey) {
       // ── Zoom: pinch gesture or Ctrl/Cmd+scroll ──
@@ -181,7 +226,7 @@ const SettingsCanvas: Component<{
     if (!dragging()) return;
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag = true;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) { didDrag = true; userAdjusted = true; }
     setPan({ x: dragStart.px + dx, y: dragStart.py + dy });
   };
 
@@ -208,35 +253,98 @@ const SettingsCanvas: Component<{
     setDitherOpen(false);
   };
 
-  // ── Video preview (world-space sized, drawn once) ──────────────────────────
+  // ── Video preview — rendered AND displayed at the real output resolution ───
+  // so 1 canvas pixel = 1 screen pixel at zoom=1. Use the pan/zoom controls
+  // to fit the whole image in the panel or zoom in further.
+  const [previewW, setPreviewW] = createSignal(PREVIEW_W);
   const [previewH, setPreviewH] = createSignal(PREVIEW_W * 0.5625); // default 16:9
   let canvasEl!: HTMLCanvasElement;
 
-  const drawPreview = () => {
+  // The preview is rendered at the TARGET output resolution so the user sees
+  // how the final conversion will actually look (including real-resolution
+  // dither artifacts). Capped to avoid pathological memory use on huge sources.
+  const PROCESS_MAX_W = 1920;
+
+  // Compute target output dimensions from appState (mirrors analyticalSize in EditorView).
+  const targetDims = () => {
     const v = props.videoEl;
-    if (!v || !v.videoWidth) return;
-    canvasEl.width = v.videoWidth;
-    canvasEl.height = v.videoHeight;
-    const ctx = canvasEl.getContext('2d')!;
-    ctx.drawImage(v, 0, 0, v.videoWidth, v.videoHeight);
-    const img = ctx.getImageData(0, 0, v.videoWidth, v.videoHeight);
-    applyDither(img, appState.dither);
-    ctx.putImageData(img, 0, 0);
-    setPreviewH(PREVIEW_W / (v.videoWidth / v.videoHeight));
+    if (!v || !v.videoWidth) return null;
+    const srcW = v.videoWidth, srcH = v.videoHeight;
+    const isGif = appState.outputFormat === 'gif';
+    const setW  = isGif ? appState.width : appState.vidWidth;
+    const rawW  = setW > 0 ? setW : srcW;
+    const w = Math.max(1, Math.min(PROCESS_MAX_W, rawW));
+    const h = Math.max(1, Math.round(w * srcH / srcW));
+    return { w, h, srcW, srcH };
   };
 
-  // Redraw when video loads or dither algorithm changes
+  const drawPreview = () => {
+    const v = props.videoEl;
+    if (!v || !v.videoWidth || v.readyState < 2) return;
+    const d = targetDims();
+    if (!d) return;
+    if (canvasEl.width  !== d.w) canvasEl.width  = d.w;
+    if (canvasEl.height !== d.h) canvasEl.height = d.h;
+    const ctx = canvasEl.getContext('2d')!;
+    ctx.drawImage(v, 0, 0, d.w, d.h);
+    const img = ctx.getImageData(0, 0, d.w, d.h);
+    applyDither(img, appState.dither);
+    ctx.putImageData(img, 0, 0);
+    // Display canvas at 1:1 with its internal resolution so the user sees
+    // true output pixels.
+    setPreviewW(d.w);
+    setPreviewH(d.h);
+  };
+
+  // Debounce the dither redraw so slider drags don't block the main thread.
+  // Full Floyd-Steinberg on 1920×1080 costs ~50–80ms; even a throttled mid-drag
+  // redraw shows up as a periodic freeze. Trailing-only debounce means the
+  // dither waits until the user pauses (or releases), so the slider itself
+  // stays buttery smooth. Preview "catches up" ~DEBOUNCE_MS after the last
+  // state change.
+  let drawTimer = 0;
+  const DEBOUNCE_MS = 140;
+  const scheduleDraw = () => {
+    clearTimeout(drawTimer);
+    drawTimer = window.setTimeout(() => {
+      drawTimer = 0;
+      drawPreview();
+    }, DEBOUNCE_MS);
+  };
+
+  // Still preview: re-render only when something meaningful changes — seek,
+  // pause, load, or a relevant setting (dither, output resolution, format).
+  // Deliberately NOT updating during playback so we don't pay 1080p dither
+  // cost at 60fps.
+  //
+  // Two effects so listener wiring doesn't churn on every setting change:
+  // ─ listener effect re-runs only when videoEl changes
+  // ─ settings effect reads the tracked signals and schedules a redraw
   createEffect(() => {
     const v = props.videoEl;
-    void appState.dither;
     if (!v) return;
-    drawPreview();
-    v.addEventListener('seeked', drawPreview);
-    v.addEventListener('loadeddata', drawPreview);
+    v.addEventListener('seeked',     scheduleDraw);
+    v.addEventListener('loadeddata', scheduleDraw);
+    v.addEventListener('pause',      scheduleDraw);
     onCleanup(() => {
-      v.removeEventListener('seeked', drawPreview);
-      v.removeEventListener('loadeddata', drawPreview);
+      v.removeEventListener('seeked',     scheduleDraw);
+      v.removeEventListener('loadeddata', scheduleDraw);
+      v.removeEventListener('pause',      scheduleDraw);
     });
+  });
+
+  createEffect(() => {
+    void appState.dither;
+    void appState.width;
+    void appState.vidWidth;
+    void appState.outputFormat;
+    if (!props.videoEl) return;
+    scheduleDraw();
+  });
+
+  onCleanup(() => {
+    clearTimeout(drawTimer);
+    drawTimer = 0;
   });
 
   return (
@@ -246,13 +354,12 @@ const SettingsCanvas: Component<{
       style={{
         position: 'relative',
         width: '100%',
-        'aspect-ratio': '597 / 433',
+        flex: '1 1 0',
+        'min-height': '0',
         background: BG,
         border: `1px solid ${ACCENT}`,
         overflow: 'clip',
         'box-sizing': 'border-box',
-        'margin-bottom': '12px',
-        'flex-shrink': '0',
       }}
     >
       {/* ── Pannable / zoomable canvas layer ── */}
@@ -292,10 +399,12 @@ const SettingsCanvas: Component<{
             style={{
               position: 'relative',
               display: 'block',
-              width: `${PREVIEW_W}px`,
+              width: `${previewW()}px`,
               height: `${previewH()}px`,
               translate: '-50% -50%',
               border: `1px solid ${ACCENT_75}`,
+              // Preserve the true pixel grid when the canvas is zoomed up.
+              'image-rendering': 'pixelated',
             }}
           />
         </div>
@@ -319,27 +428,31 @@ const SettingsCanvas: Component<{
           const openH = () => BTN_H + ITEMS_PAD_TOP + nItems() * ITEM_H + (nItems() - 1) * ITEM_GAP;
 
           return (
-            <div style={{
-              position: 'absolute',
-              right: '16px', top: '14px',
-              display: 'flex', 'flex-direction': 'column',
-              'align-items': 'flex-end',
-              overflow: 'hidden',
-              height: `${ditherOpen() ? openH() : closedH()}px`,
-              transition: 'height 200ms cubic-bezier(0.006, 0.984, 0.000, 1.109)',
-              'pointer-events': 'auto',
-            }}>
+            <div
+              onMouseLeave={() => props.isPortrait && setTooltip(null)}
+              style={{
+                position: 'absolute',
+                left: '16px', top: '14px',
+                display: 'flex', 'flex-direction': 'column',
+                'align-items': 'flex-start',
+                overflow: 'hidden',
+                height: `${ditherOpen() ? openH() : closedH()}px`,
+                transition: 'height 200ms cubic-bezier(0.006, 0.984, 0.000, 1.109)',
+                'pointer-events': 'auto',
+              }}
+            >
               <div onMouseEnter={() => ditherOpen() && setTooltip({ title: currentDither().title, desc: currentDither().desc })}>
                 <FormatButton
                   format={displayDither()}
                   open={ditherOpen()}
                   onClick={() => setDitherOpen(o => !o)}
                   spring={{ dur: 0.200, x1: 0.006, y1: 0.984, x2: 0.000, y2: 1.109 }}
+                  title="Dither algorithm"
                 />
               </div>
               <div style={{
                 display: 'flex', 'flex-direction': 'column',
-                'align-items': 'flex-end',
+                'align-items': 'flex-start',
                 'padding-top': `${ITEMS_PAD_TOP}px`,
                 gap: `${ITEM_GAP}px`,
                 'pointer-events': ditherOpen() ? 'auto' : 'none',
@@ -363,11 +476,11 @@ const SettingsCanvas: Component<{
           );
         })()}
 
-        {/* Tooltip box — positioned at top-left */}
+        {/* Tooltip box — positioned at top-right */}
         <Show when={tooltipVisible()}>
           <div style={{
             position: 'absolute',
-            left: '16px', top: '14px',
+            right: '16px', top: '14px',
             width: '320px',
             border: `1px solid ${ACCENT}`,
             background: BG,
@@ -396,18 +509,23 @@ const SettingsCanvas: Component<{
         }}>
             {[
               { label: '+', action: () => {
+                userAdjusted = true;
                 const oldZ = zoom();
                 const newZ = Math.min(oldZ * 1.3, 20);
                 setPan(p => ({ x: p.x * newZ / oldZ, y: p.y * newZ / oldZ }));
                 setZoom(newZ);
               }},
               { label: '−', action: () => {
+                userAdjusted = true;
                 const oldZ = zoom();
                 const newZ = Math.max(oldZ / 1.3, 0.1);
                 setPan(p => ({ x: p.x * newZ / oldZ, y: p.y * newZ / oldZ }));
                 setZoom(newZ);
               }},
-              { label: '⊙', action: () => { setPan({ x: 0, y: 0 }); setZoom(1); }},
+              // Re-arms auto-fit — any subsequent container/preview resize
+              // will snap the preview back to the fit scale until the user
+              // pan/zooms again.
+              { label: '⊙', action: () => { userAdjusted = false; fitToContainer(); } },
             ].map(btn => (
               <div
                 style={{

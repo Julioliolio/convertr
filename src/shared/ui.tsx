@@ -1,4 +1,4 @@
-import { Component, createEffect, onCleanup } from 'solid-js';
+import { Component, createEffect, on, onCleanup } from 'solid-js';
 import { ACCENT, ACCENT_75, BG, MONO } from './tokens';
 import { solveBezier } from './utils';
 import type { JSX } from 'solid-js';
@@ -11,12 +11,19 @@ const PLAY_2  = "M30.794,62.878 L51.565,42.582 L47.411,38.524 L26.641,58.820 Z";
 // Pause bars — point order matches play arms for a clean morph
 const PAUSE_1 = "M27.294,62.272 L27.294,22.904 L33.099,22.904 L33.099,62.272 Z";
 const PAUSE_2 = "M50.904,62.272 L50.904,22.904 L45.099,22.904 L45.099,62.272 Z";
-// Chevron (used in FormatButton)
-const CHEVRON_1 = "M47.405,46.646 L26.647,26.352 L30.798,22.294 L51.556,42.588 Z";
-const CHEVRON_2 = "M30.794,62.878 L51.552,42.584 L47.401,38.526 L26.643,58.820 Z";
-// Minus targets (used in FormatButton when open)
-const MINUS_1   = "M59.5,45.9 L19.5,45.9 L19.5,40.1 L59.5,40.1 Z";
-const MINUS_2   = "M19.5,45.9 L59.5,45.9 L59.5,40.1 L19.5,40.1 Z";
+// Chevron (used in FormatButton) — viewBox 28×44.
+// Derived from the user-provided dropdown.svg: each rect's 4 corners, in the
+// rect-local (0,0)→(w,0)→(w,h)→(0,h) winding order, pushed through the rect's
+// matrix transform. Keeping that winding is what makes the per-point linear
+// interpolation to the minus rect look like a clean fold, not a shear.
+const CHEVRON_1 = "M22.1948,25.7462 L1.4312,5.4567 L5.5838,1.3984 L26.3474,21.6879 Z";
+const CHEVRON_2 = "M5.58331,41.9784 L26.347,21.6889 L22.1943,17.6306 L1.4307,37.9201 Z";
+// Minus targets (used in FormatButton when open) — a 26×5.8 horizontal bar
+// centered vertically in the 28×44 viewBox. Corner order matches the chevron
+// paths above so each chevron corner maps to the nearest minus corner:
+// both arms fold flat onto the same bar, no crossing strokes mid-morph.
+const MINUS_1   = "M27,24.9 L1,24.9 L1,19.1 L27,19.1 Z";
+const MINUS_2   = "M1,24.9 L27,24.9 L27,19.1 L1,19.1 Z";
 
 // ── PlayPause icon (morphing play ↔ pause via rAF) ──────────────────────────
 
@@ -103,6 +110,70 @@ export const ArrowSvg: Component<{ width?: number; height?: number }> = (p) => (
   </svg>
 );
 
+// ── Settings dial (toggles video settings panel), 20 × 22 ───────────────────
+// Two visual states driven by `open`; silhouette is identical in both — only
+// the fill inverts (positive vs negative of the same shape):
+//   closed → white stroked ring with a white "hand" inside (empty dial)
+//   open   → filled white disc with a pink "hand" subtracted from it
+// Both states are drawn and crossfaded so the toggle doesn't feel sudden.
+// On hover and on state change the hand sweeps 360° with a back.out
+// overshoot — a "tuning" gesture. Both triggers use the Web Animations API
+// (element.animate) so each call creates a fresh Animation instance — no
+// CSS animation restart headaches.
+const DIAL_SPIN_KEYFRAMES: Keyframe[] = [
+  { transform: 'rotate(0deg)' },
+  { transform: 'rotate(360deg)' },
+];
+const DIAL_SPIN_OPTS: KeyframeAnimationOptions = {
+  duration: 540,
+  easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',  // back.out
+};
+
+export const SettingsSvg: Component<{ open?: boolean; width?: number; height?: number }> = (p) => {
+  let svgRef!: SVGSVGElement;
+  let lastSpinAt = 0;
+
+  const triggerSpin = () => {
+    if (!svgRef) return;
+    const now = performance.now();
+    // If a spin already fired within 0.5s, skip this one so a quick
+    // hover → click doesn't double-fire. Spaced-out interactions each
+    // get their own sweep.
+    if (now - lastSpinAt < 500) return;
+    lastSpinAt = now;
+    svgRef.querySelectorAll('.settings-dial__hand').forEach(h =>
+      (h as SVGElement).animate(DIAL_SPIN_KEYFRAMES, DIAL_SPIN_OPTS),
+    );
+  };
+
+  // Spin on state change (skip the initial render).
+  createEffect(on(() => p.open, triggerSpin, { defer: true }));
+
+  return (
+    <svg
+      ref={svgRef!}
+      class="settings-dial"
+      onMouseEnter={triggerSpin}
+      width={p.width ?? 20} height={p.height ?? 22}
+      viewBox="0 0 79 88" fill="none" xmlns="http://www.w3.org/2000/svg"
+      preserveAspectRatio="none"
+      style={{ width: `${p.width ?? 20}px`, height: `${p.height ?? 22}px`, 'flex-shrink': '0' }}
+    >
+      <rect width="78.198" height="87.165" fill={ACCENT} />
+      {/* Closed state — stroked ring with white hand inside */}
+      <g class="settings-dial__state" style={{ opacity: p.open ? 0 : 1 }}>
+        <circle cx="39.1" cy="43.6" r="22" fill="none" stroke="#FFFFFF" stroke-width="6.5" />
+        <path class="settings-dial__hand" d="M39.1 43.6 L51.83 30.87" stroke="#FFFFFF" stroke-width="6.5" stroke-linecap="square" />
+      </g>
+      {/* Open state — filled disc with pink hand (subtractive) */}
+      <g class="settings-dial__state" style={{ opacity: p.open ? 1 : 0 }}>
+        <circle cx="39.1" cy="43.6" r="22" fill="#FFFFFF" />
+        <path class="settings-dial__hand" d="M39.1 43.6 L51.83 30.87" stroke={ACCENT} stroke-width="6.5" stroke-linecap="square" />
+      </g>
+    </svg>
+  );
+};
+
 // ── Chip: pink bg, cream text, IBM Plex Mono ─────────────────────────────────
 
 // ── FormatButton: morphs chevron → minus when open ──────────────────────────
@@ -110,6 +181,7 @@ export const ArrowSvg: Component<{ width?: number; height?: number }> = (p) => (
 export const FormatButton: Component<{
   format: string; open: boolean; onClick: () => void;
   spring?: { dur: number; x1: number; y1: number; x2: number; y2: number };
+  title?: string;
 }> = (p) => {
   let ref1!: SVGPathElement;
   let ref2!: SVGPathElement;
@@ -157,10 +229,11 @@ export const FormatButton: Component<{
 
   return (
     <div
+      title={p.title}
       style={{
         position: 'relative',
-        display: 'inline-flex', 'align-items': 'center', gap: '3px',
-        padding: '2px',
+        display: 'inline-flex', 'align-items': 'center', gap: '10px',
+        padding: '2px 4px 2px 2px',
         cursor: 'pointer', 'user-select': 'none',
       }}
       onClick={p.onClick}
@@ -181,10 +254,13 @@ export const FormatButton: Component<{
       }}>
         {p.format}
       </span>
+      {/* Dropdown glyph — 8×12 render of the 28×44 viewBox chevron.
+          Fill-only (no stroke) so the arm thickness lands at ~1.6 px,
+          close to the IBM Plex Mono 16 px stem width. */}
       <svg
-        width={16} height={16}
-        viewBox="0 0 79 86" fill="none" preserveAspectRatio="none"
-        style={{ position: 'relative', 'z-index': '1', width: '16px', height: '16px', 'flex-shrink': '0' }}
+        width={8} height={12}
+        viewBox="0 0 28 44" fill="none" preserveAspectRatio="none"
+        style={{ position: 'relative', 'z-index': '1', width: '8px', height: '12px', 'flex-shrink': '0' }}
       >
         <path ref={ref1!} fill={BG} style={{ transition: `fill ${(p.spring?.dur ?? 0.15) * 1000}ms ease-in-out` }} />
         <path ref={ref2!} fill={BG} style={{ transition: `fill ${(p.spring?.dur ?? 0.15) * 1000}ms ease-in-out` }} />
@@ -243,17 +319,4 @@ export const GuideLine: Component<{
       : { position: 'absolute', left: '0', right: '0', height: '1px', background: ACCENT_75, 'pointer-events': 'none' }
     }
   />
-);
-
-// ── Playground control slider ────────────────────────────────────────────────
-export const CtrlSlider: Component<{
-  label: string; value: number; min: number; max: number;
-  step?: number; onChange: (v: number) => void; suffix?: string; accent?: string;
-}> = (p) => (
-  <div style={{ display: 'flex', 'align-items': 'center', gap: '8px', 'font-family': MONO, 'font-size': '11px', color: '#555' }}>
-    <span style={{ width: '90px', 'flex-shrink': '0' }}>{p.label}</span>
-    <input type="range" min={p.min} max={p.max} step={p.step ?? 1} value={p.value}
-      onInput={e => p.onChange(Number(e.currentTarget.value))} style={{ width: '100px' }} />
-    <span style={{ width: '50px', 'text-align': 'right', color: p.accent ?? '#1a1a8a' }}>{p.value}{p.suffix ?? ''}</span>
-  </div>
 );

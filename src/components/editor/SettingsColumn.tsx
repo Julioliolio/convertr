@@ -1,24 +1,19 @@
 import { Component } from 'solid-js';
-import { ACCENT, MONO } from '../../shared/tokens';
-import ControlPanel from '../layout/ControlPanel';
+import VideoSettings from '../controls/VideoSettings';
 
-// VIDEO SETTINGS label + ControlPanel (sliders + RUN button) for the settings
-// column. The parent positions/animates this via the forwarded ref.
+// Video settings column — slider placeholder boxes + dither canvas.
+// The parent positions/sizes this absolutely via the forwarded ref (left/top/width/height).
 const SettingsColumn: Component<{
   ref: (el: HTMLDivElement) => void;
-  onRun: () => void;
+  videoEl?: HTMLVideoElement;
+  open?: boolean;
+  isPortrait?: boolean;
 }> = (p) => (
   <div
     ref={p.ref}
-    style={{ position: 'absolute', '-webkit-app-region': 'no-drag', 'min-width': '200px' } as any}
+    style={{ position: 'absolute', overflow: 'hidden', '-webkit-app-region': 'no-drag' } as any}
   >
-    <span style={{
-      'font-family': MONO, 'font-size': '16px', 'line-height': '20px',
-      color: ACCENT, 'white-space': 'nowrap', display: 'block', 'margin-bottom': '12px',
-    }}>
-      VIDEO SETTINGS
-    </span>
-    <ControlPanel onRun={p.onRun} />
+    <VideoSettings videoEl={p.videoEl} open={p.open} isPortrait={p.isPortrait} />
   </div>
 );
 
