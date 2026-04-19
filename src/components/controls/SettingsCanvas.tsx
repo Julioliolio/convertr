@@ -1,7 +1,7 @@
 import { Component, createSignal, createEffect, For, Show, onCleanup, onMount } from 'solid-js';
 import { appState, setAppState } from '../../state/app';
 import { ACCENT, ACCENT_75, BG, MONO } from '../../shared/tokens';
-import { FormatButton } from '../../shared/ui';
+import { FormatButton, Chip } from '../../shared/ui';
 import { scrambleText } from '../../shared/utils';
 
 const DITHER_SCRAMBLE_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -128,6 +128,12 @@ const SettingsCanvas: Component<{
     } else {
       setTooltip(null);
     }
+  });
+
+  // Close the dither dropdown whenever the output format leaves GIF so the
+  // menu isn't stranded open behind the (now hidden) trigger button.
+  createEffect(() => {
+    if (appState.outputFormat !== 'gif' && ditherOpen()) setDitherOpen(false);
   });
 
   let containerRef!: HTMLDivElement;
@@ -278,6 +284,23 @@ const SettingsCanvas: Component<{
     return { w, h, srcW, srcH };
   };
 
+  // Non-GIF preview: draw the live video frame at target output dimensions
+  // without the dither step. Paired with an rAF loop below that samples the
+  // upstream <video> at the target fps so the user sees playback at the
+  // resolution AND frame rate they'll get.
+  const drawVideoFrame = () => {
+    const v = props.videoEl;
+    if (!v || !v.videoWidth || v.readyState < 2) return;
+    const d = targetDims();
+    if (!d) return;
+    if (canvasEl.width  !== d.w) canvasEl.width  = d.w;
+    if (canvasEl.height !== d.h) canvasEl.height = d.h;
+    const ctx = canvasEl.getContext('2d')!;
+    ctx.drawImage(v, 0, 0, d.w, d.h);
+    setPreviewW(d.w);
+    setPreviewH(d.h);
+  };
+
   const drawPreview = () => {
     const v = props.videoEl;
     if (!v || !v.videoWidth || v.readyState < 2) return;
@@ -287,9 +310,13 @@ const SettingsCanvas: Component<{
     if (canvasEl.height !== d.h) canvasEl.height = d.h;
     const ctx = canvasEl.getContext('2d')!;
     ctx.drawImage(v, 0, 0, d.w, d.h);
-    const img = ctx.getImageData(0, 0, d.w, d.h);
-    applyDither(img, appState.dither);
-    ctx.putImageData(img, 0, 0);
+    // Dither only runs for GIF output — other formats render the raw video
+    // frame at target resolution so users see the actual "scaled" preview.
+    if (appState.outputFormat === 'gif') {
+      const img = ctx.getImageData(0, 0, d.w, d.h);
+      applyDither(img, appState.dither);
+      ctx.putImageData(img, 0, 0);
+    }
     // Display canvas at 1:1 with its internal resolution so the user sees
     // true output pixels.
     setPreviewW(d.w);
@@ -342,9 +369,35 @@ const SettingsCanvas: Component<{
     scheduleDraw();
   });
 
+  // Live preview loop for non-GIF formats: sample the upstream <video> at the
+  // target fps and paint onto the canvas. Gives the user a real "what you'll
+  // get" feed — same pan/zoom infrastructure, no dither, accurate scaled
+  // resolution and frame rate. Stops when the format is GIF (the dither
+  // pipeline above handles that case with its own debounced still render).
+  let videoLoopRaf = 0;
+  let lastFrameTime = 0;
+  const videoTick = (now: number) => {
+    videoLoopRaf = requestAnimationFrame(videoTick);
+    const targetFps = Math.max(1, Math.min(120, Math.round(appState.fps) || 24));
+    const frameInterval = 1000 / targetFps;
+    if (now - lastFrameTime < frameInterval) return;
+    lastFrameTime = now;
+    drawVideoFrame();
+  };
+  createEffect(() => {
+    const isGif = appState.outputFormat === 'gif';
+    cancelAnimationFrame(videoLoopRaf);
+    videoLoopRaf = 0;
+    if (!isGif && props.videoEl) {
+      lastFrameTime = 0;
+      videoLoopRaf = requestAnimationFrame(videoTick);
+    }
+  });
+
   onCleanup(() => {
     clearTimeout(drawTimer);
     drawTimer = 0;
+    cancelAnimationFrame(videoLoopRaf);
   });
 
   return (
@@ -417,8 +470,28 @@ const SettingsCanvas: Component<{
         'pointer-events': 'none',
         'z-index': '3',
       }}>
-        {/* Dithering dropdown */}
-        {(() => {
+        {/* Target dimensions/fps caption — visible for non-GIF outputs in
+            place of the dither dropdown. The live preview below is sampled
+            at exactly these target dims + fps, so the caption doubles as a
+            legend for what the user is seeing. */}
+        <Show when={appState.outputFormat !== 'gif'}>
+          <div style={{
+            position: 'absolute',
+            left: '16px', top: '14px',
+            'pointer-events': 'none', 'user-select': 'none',
+          }}>
+            <Chip size="xs">
+              {(() => {
+                const d = targetDims();
+                const f = Math.round(appState.fps) || 24;
+                if (!d) return `preview @ ${f}fps`;
+                return `${d.w}×${d.h} @ ${f}fps`;
+              })()}
+            </Chip>
+          </div>
+        </Show>
+        {/* Dithering dropdown — GIF only */}
+        <Show when={appState.outputFormat === 'gif'}>{(() => {
           const ITEM_H = 20;
           const ITEM_GAP = 4;
           const ITEMS_PAD_TOP = 4;
@@ -474,7 +547,7 @@ const SettingsCanvas: Component<{
               </div>
             </div>
           );
-        })()}
+        })()}</Show>
 
         {/* Tooltip box — positioned at top-right */}
         <Show when={tooltipVisible()}>

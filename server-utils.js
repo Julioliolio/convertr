@@ -88,22 +88,36 @@ function runFFmpeg(args, onProgress) {
 
 const H265_CAPABLE = new Set(['mp4', 'mkv']);
 
+// Browser-native playback set — anything else needs a server-side preview proxy.
+// gif is listed but uses <img>, not <video>; callers should special-case it.
+const BROWSER_PLAYABLE = new Set(['mp4', 'mov', 'm4v', 'webm', 'ogv', '3gp']);
+
+function isBrowserPlayable(ext) {
+  if (!ext) return false;
+  return BROWSER_PLAYABLE.has(ext.toLowerCase().replace(/^\./, ''));
+}
+
 function getCodecArgs(outputFormat, opts) {
-  const { crf, codec, width, fps } = opts;
+  const { crf, codec, width, fps, audio } = opts;
   const fpsVal = fps && fps !== 'original' ? Math.min(120, Math.max(1, parseInt(fps) || 0)) : 0;
   const scaleFilter = width === -1 ? null : `scale=${width}:-2`;
+  const keepAudio = audio !== false && audio !== 'false' && audio !== 0 && audio !== '0';
 
   let args;
   switch (outputFormat) {
     case 'webm':
-      args = ['-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-c:a', 'libopus', '-b:a', '128k'];
+      args = keepAudio
+        ? ['-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-c:a', 'libopus', '-b:a', '128k']
+        : ['-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-an'];
       break;
     case 'mp4':
     case 'mov':
     case 'avi':
     case 'mkv': {
       const vcodec = H265_CAPABLE.has(outputFormat) && codec === 'h265' ? 'libx265' : 'libx264';
-      args = ['-c:v', vcodec, '-crf', String(crf), '-preset', 'medium', '-c:a', 'aac', '-b:a', '128k'];
+      args = keepAudio
+        ? ['-c:v', vcodec, '-crf', String(crf), '-preset', 'medium', '-c:a', 'aac', '-b:a', '128k']
+        : ['-c:v', vcodec, '-crf', String(crf), '-preset', 'medium', '-an'];
       break;
     }
     default:
@@ -113,6 +127,32 @@ function getCodecArgs(outputFormat, opts) {
   if (fpsVal > 0) args.push('-r', String(fpsVal));
   if (scaleFilter) args.push('-vf', scaleFilter);
   return args;
+}
+
+// Args for a "fast cut" — stream-copy with keyframe-aligned trim. Audio is
+// preserved or stripped per the `audio` flag. Produces an identical codec
+// output in seconds rather than re-encoding.
+function getFastCutArgs(audio) {
+  const keepAudio = audio !== false && audio !== 'false' && audio !== 0 && audio !== '0';
+  return keepAudio
+    ? ['-c', 'copy', '-avoid_negative_ts', 'make_zero']
+    : ['-c:v', 'copy', '-an', '-avoid_negative_ts', 'make_zero'];
+}
+
+// Low-res h264 mp4 proxy used as the editor preview for inputs the browser
+// can't play natively (gif, avi, flv, wmv, ts, mts, older mkv codecs, …).
+// Scale long-edge to 720 so decode stays cheap on the client. Keep audio so
+// the trim preview isn't silent if the source had sound.
+function buildProxyArgs(inputPath, outputPath) {
+  return [
+    '-y', '-i', inputPath,
+    '-vf', "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28',
+    '-movflags', '+faststart',
+    '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-b:a', '96k',
+    outputPath,
+  ];
 }
 
 // ── Encoding parameter parsing ──────────────────────────────────────────────
@@ -129,6 +169,8 @@ function parseEncodingParams(body) {
     dither:    body.dither,
     crf:       Math.min(51, Math.max(0, parseInt(body.crf) || 23)),
     codec:     body.codec || 'h264',
+    audio:     body.audio !== false && body.audio !== 'false' && body.audio !== 0 && body.audio !== '0',
+    fastCut:   body.fastCut === true || body.fastCut === 'true' || body.fastCut === 1 || body.fastCut === '1',
     trimStart: rawStart != null && !isNaN(rawStart) ? rawStart : null,
     trimEnd:   rawEnd   != null && !isNaN(rawEnd)   ? rawEnd   : null,
   };
@@ -157,6 +199,9 @@ module.exports = {
   buildGifFilters,
   runFFmpeg,
   getCodecArgs,
+  getFastCutArgs,
+  buildProxyArgs,
+  isBrowserPlayable,
   parseEncodingParams,
   serveJobFile,
 };

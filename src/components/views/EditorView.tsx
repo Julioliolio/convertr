@@ -3,17 +3,17 @@ import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import { startConversion } from '../../api/convert';
 import { listenProgress, stopProgress } from '../../api/progress';
-import { uploadFile } from '../../api/upload';
+import { uploadFile, waitForPreview } from '../../api/upload';
 import { fetchEstimate, cancelEstimate } from '../../api/estimate';
 import { appState, setAppState } from '../../state/app';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
 import { XSvg, SettingsSvg, Chip, Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
 import LoadingOverlay from '../LoadingOverlay';
-import { fmtBytes, extractFrames, scrambleText } from '../../shared/utils';
-import ConvertingOverlay from '../editor/ConvertingOverlay';
+import { fmtBytes, extractFrames, scrambleText, useSmoothedProgress } from '../../shared/utils';
 import FormatPicker    from '../editor/FormatPicker';
 import TrimRow         from '../editor/TrimRow';
 import SettingsColumn  from '../editor/SettingsColumn';
+import CarrierBricks   from '../loading/CarrierBricks';
 
 // Server-supported formats (lowercase server-side)
 const FORMATS = ['GIF', 'AVI', 'MP4', 'MOV', 'WEBM', 'MKV'];
@@ -46,6 +46,15 @@ const RESULT_EXPAND = 48;
 // Media is inset a little further than RESULT_EXPAND so the corner chips
 // (OUTPUT SIZE, delta, DOWNLOAD) have breathing room around the media frame.
 const RESULT_MEDIA_INSET = 80;
+
+// While converting, the video bbox morphs into a horizontal loading bar —
+// Option 5 (CarrierBricks) renders inside the shrunken bbox. These dims
+// match the playground shortlist the user signed off on.
+const CONVERTING_BAR_W_RATIO = 0.60;   // 60% of viewport width
+const CONVERTING_BAR_H_PX    = 80;
+// Wait for the bbox→bar morph (p1_dur + p2_delay + p2_dur = 1050ms) before
+// starting the fill animation, so the bar appears at 0% rather than mid-fill.
+const CONVERTING_BAR_FADE_MS = 1050;
 
 // When settings is open, keep one bbox dimension at its closed-state size and
 // let the opposing side shrink to make room for the panel. This anchors the
@@ -83,13 +92,35 @@ interface TransitionSet {
 // hasResult: result is rendered — bbox expands outward by RESULT_EXPAND on all
 // sides (clamped to avail). Top-bar space and settings reserve are released
 // because those controls are hidden in result mode.
-function computeBox(vw: number, vh: number, videoW: number, videoH: number, cfg: LayoutCfg, extraTopPx = 0, settingsOpen = false, hasResult = false): BoxResult {
+function computeBox(vw: number, vh: number, videoW: number, videoH: number, cfg: LayoutCfg, extraTopPx = 0, settingsOpen = false, hasResult = false, converting = false): BoxResult {
   const isLandscape = videoW >= videoH;
+  // Converting state: override bbox to a 60vw × 80px bar centered in the
+  // viewport. Top-bar + settings reserves collapse (chrome is hidden while
+  // converting). The existing guide / crosshair transitions animate the
+  // morph for free.
+  if (converting) {
+    const boxW = Math.round(vw * CONVERTING_BAR_W_RATIO);
+    const boxH = CONVERTING_BAR_H_PX;
+    const left = (vw - boxW) / 2;
+    const top  = (vh - boxH) / 2;
+    const right = left + boxW;
+    const bottom = top + boxH;
+    return {
+      left, top, right, bottom, isLandscape,
+      gl: pct(left, vw), gr: pct(right, vw),
+      gt: pct(top, vh),  gb: pct(bottom, vh),
+      topBarTopPct: pct(top, vh), topBarHPct: '0%',
+      settingsTop: pct(top, vh), settingsLeft: pct(left, vw),
+      settingsWidth: '0%', settingsHeight: '0%',
+    };
+  }
   const padH    = vw * cfg.PAD_H;
   const padV    = vh * cfg.PAD_V;
   const topBarH = hasResult ? 0 : TOP_BAR_H_PX;
-  const reserveW = settingsOpen && !hasResult ? SETTINGS_RESERVE_W : 0;
-  const reserveH = settingsOpen && !hasResult ? SETTINGS_RESERVE_H : 0;
+  const maxReserveW = Math.min(SETTINGS_RESERVE_W, Math.round(vw * 0.45));
+  const maxReserveH = Math.min(SETTINGS_RESERVE_H, Math.round(vh * 0.45));
+  const reserveW = settingsOpen && !hasResult ? maxReserveW : 0;
+  const reserveH = settingsOpen && !hasResult ? maxReserveH : 0;
   const availW  = vw - 2 * padH - (isLandscape ? 0 : reserveW);
   const availH  = vh - 2 * padV - topBarH - (isLandscape ? reserveH : 0);
 
@@ -202,6 +233,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
 
   // ── Video / timeline refs & state ────────────────────────────────────────────
   let videoRef!: HTMLVideoElement;
+  let resultVideoRef: HTMLVideoElement | undefined;
   const [videoEl, setVideoEl] = createSignal<HTMLVideoElement | undefined>();
   let durationInputRef!: HTMLInputElement;
   let isDraggingHandle = false;
@@ -216,10 +248,45 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const [editingDuration, setEditingDuration] = createSignal(false);
   const [draftDuration,   setDraftDuration]   = createSignal('');
 
+  // ── Effective video src: prefer the server-generated preview proxy when the
+  // original isn't browser-playable (gif, avi, flv, wmv, ts, …). The memo is
+  // reactive, so swapping in the preview URL reloads the <video> element and
+  // re-fires loadedmetadata automatically.
+  const effectiveSrc = createMemo(() => appState.previewUrl || props.video.objectUrl);
+
   // ── Conversion state ─────────────────────────────────────────────────────────
   const [isConverting,   setIsConverting]   = createSignal(false);
+  // Smoothed progress feeding the loading bar — guarantees a continuous
+  // 0→100 sweep over at least 2s, even when SSE updates jump (e.g. 90→100).
+  // The `barAnimActive` gate keeps displayed=0 until the bbox→bar morph has
+  // finished, so the fill ramp begins from zero rather than mid-fill.
+  const [barAnimActive, setBarAnimActive] = createSignal(false);
+  const smoothedProgress = useSmoothedProgress(() => appState.progress, 2000, barAnimActive);
+  createEffect(() => {
+    if (!appState.converting) {
+      setBarAnimActive(false);
+      return;
+    }
+    const t = setTimeout(() => setBarAnimActive(true), CONVERTING_BAR_FADE_MS);
+    onCleanup(() => clearTimeout(t));
+  });
   const [resultUrl,      setResultUrl]      = createSignal<string | null>(null);
   const [resultFilename, setResultFilename] = createSignal<string | null>(null);
+  // Hold `converting` true until the bar's animation has caught up, so the
+  // result video doesn't flash in mid-fill on a fast conversion.
+  createEffect(() => {
+    if (!appState.converting) return;
+    if (resultUrl() == null) return;
+    if (smoothedProgress() < appState.progress) return;
+    setIsConverting(false);
+    setAppState('converting', false);
+  });
+  // Latched at run-time: if this job was a stream-copy fast cut, the result
+  // file is bit-for-bit the input (minus trim boundaries). Swapping in a
+  // second <video> and fading the original out looks like a jarring reload;
+  // instead we keep the original video mounted and just morph the chrome /
+  // bbox into result shape.
+  const [resultWasFastCut, setResultWasFastCut] = createSignal(false);
   // Tracks mouse-press on the result media so we can shrink it while the user
   // has it grabbed. Cleared by mouseup/mouseleave (release off-element) and
   // dragend (drag completes or is cancelled).
@@ -231,6 +298,20 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
 
   // ── Intro loading overlay (plays inside bounding box on mount) ──────────────
   const [showIntroOverlay, setShowIntroOverlay] = createSignal(true);
+
+  // Brief icon flash over the result video to confirm play/pause toggles.
+  // flashKey increments on every toggle so the <Show keyed> remounts the node
+  // and the CSS animation replays even on rapid successive toggles.
+  const [flashIcon, setFlashIcon] = createSignal<'play' | 'pause' | null>(null);
+  const [flashKey, setFlashKey] = createSignal(0);
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  const triggerFlash = (kind: 'play' | 'pause') => {
+    setFlashIcon(kind);
+    setFlashKey(k => k + 1);
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => setFlashIcon(null), 500);
+  };
+  onCleanup(() => { if (flashTimer) clearTimeout(flashTimer); });
 
   const trimmedDuration = () => trimEnd() - trimStart();
 
@@ -309,6 +390,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       fps: Math.round(appState.fps),
       width: appState.outputFormat === 'gif' ? appState.width : appState.vidWidth,
       dither: appState.dither, crf: appState.crf, codec: appState.codec,
+      audio: appState.audio, fastCut: appState.fastCut,
       trimStart: trimStart(), trimEnd: trimEnd(),
     }).then(bytes => {
       const result = bytes != null ? fmtBytes(bytes) : analyticalSize();
@@ -326,7 +408,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     appState.outputFormat; appState.fps; appState.width; appState.vidWidth;
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    appState.crf; appState.dither; appState.codec;
+    appState.crf; appState.dither; appState.codec; appState.audio; appState.fastCut;
     clearTimeout(estimateTimer);
     if (!ready || !jobId || isDraggingHandle) return;
     estimateTimer = window.setTimeout(runEstimate, 400);
@@ -334,8 +416,9 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   onCleanup(() => clearTimeout(estimateTimer));
 
   const togglePlay = () => {
-    if (videoRef.paused) videoRef.play().catch(() => {});
-    else videoRef.pause();
+    const el = hasResult() && resultVideoRef ? resultVideoRef : videoRef;
+    if (el.paused) { el.play().catch(() => {}); if (hasResult()) triggerFlash('play'); }
+    else { el.pause(); if (hasResult()) triggerFlash('pause'); }
   };
 
   const handleTrimChange = (start: number, end: number) => {
@@ -501,24 +584,94 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   // registered before the setBox/applyBox effects so the new transition is
   // in place before the next applyBox run writes the new geometry.
   const isLandscape = props.video.width >= props.video.height;
-  const hasResult = createMemo(() => resultUrl() != null);
+  // Gate on `!converting` so the result media (and result-mode layout) waits
+  // for the bar's smoothed animation to finish — otherwise on a fast SSE the
+  // result video pops in behind the still-filling bar.
+  const hasResult = createMemo(() => resultUrl() != null && !appState.converting);
+
+  // Responsive inset / padding — shrink proportionally on small bboxes
+  const resultInset = createMemo(() => {
+    const b = box();
+    if (!b) return RESULT_MEDIA_INSET;
+    return Math.min(RESULT_MEDIA_INSET, Math.floor(Math.min(b.right - b.left, b.bottom - b.top) * 0.12));
+  });
+
+  // Fast-cut wrapper transition: UNIFORM timing across all four axes so the
+  // video scales in unison with the bbox (same duration horizontal + vertical
+  // → no moment where one edge hits its endpoint while the other still has
+  // 300ms+ to go, which was reading as the video "going full-screen before
+  // the bbox catches up"). Duration matches the total end-time of the guide
+  // stagger (p1_dur or p2_dur + p2_delay) so bbox chrome and the video
+  // finish their morph at the same moment.
+  const fastCutWrapTr = createMemo(() => {
+    const ease = EASE_STR;
+    const { p1_dur, p2_dur, p2_delay } = anim.timing;
+    const total = Math.max(p1_dur, p2_dur + p2_delay);
+    const T = `${total}s ${ease}`;
+    return `top ${T}, bottom ${T}, left ${T}, right ${T}, opacity 0.25s ease`;
+  });
+
+  // Fast-cut result wrapper offsets: shape the wrapper to the video's true
+  // aspect ratio (fit within the inset area, centered). Keeps the video at
+  // 100%/100% of the wrapper with object-fit:cover — no letterbox, no crop,
+  // just a frame that matches the processed video's real proportions.
+  const fastCutWrap = createMemo(() => {
+    const b = box();
+    const inset = resultInset();
+    if (!b) return { t: inset, l: inset, r: inset, bt: inset };
+    const bboxW = b.right - b.left;
+    const bboxH = b.bottom - b.top;
+    const insetW = bboxW - 2 * inset;
+    const insetH = bboxH - 2 * inset;
+    if (insetW <= 0 || insetH <= 0) return { t: inset, l: inset, r: inset, bt: inset };
+    const videoAspect = props.video.width / props.video.height;
+    let wrapW: number, wrapH: number;
+    if (insetW / insetH > videoAspect) {
+      wrapH = insetH;
+      wrapW = wrapH * videoAspect;
+    } else {
+      wrapW = insetW;
+      wrapH = wrapW / videoAspect;
+    }
+    const padH = (insetW - wrapW) / 2;
+    const padV = (insetH - wrapH) / 2;
+    return {
+      t:  inset + padV,
+      l:  inset + padH,
+      r:  inset + padH,
+      bt: inset + padV,
+    };
+  });
+  const bboxPad = createMemo(() => {
+    const b = box();
+    if (!b) return 24;
+    return Math.min(24, Math.max(8, Math.floor(Math.min(b.right - b.left, b.bottom - b.top) * 0.06)));
+  });
   let prevFmtOpen = false;
   let prevSettingsOpen = false;
   let prevHasResult = false;
+  let prevConverting = false;
   createEffect(() => {
     const a = anim;
     const isFmtOpen = fmtOpen();
     const isSettingsOpen = settingsOpen();
     const isHasResult = hasResult();
+    const isConv = appState.converting;
     const fmtChanged = isFmtOpen !== prevFmtOpen;
     const settingsChanged = isSettingsOpen !== prevSettingsOpen;
     const resultChanged = isHasResult !== prevHasResult;
+    const convertingChanged = isConv !== prevConverting;
     prevFmtOpen = isFmtOpen;
     prevSettingsOpen = isSettingsOpen;
     prevHasResult = isHasResult;
+    prevConverting = isConv;
 
-    // Toggle → uniform timing; mount/exit (no toggle) → staggered p1/p2.
-    const dropdownDur = (settingsChanged || fmtChanged || resultChanged) ? a.dropdown.dur : undefined;
+    // Settings + format toggles stay on the uniform dropdown timing so the
+    // UI feels snappy. All bbox shape changes (editor ↔ loading bar ↔
+    // result) follow the staggered p1/p2 rhythm — one axis unfolds before
+    // the other, matching the cinematic mount/exit animation.
+    void convertingChanged; // all converting transitions now use stagger
+    const dropdownDur = (settingsChanged || fmtChanged) ? a.dropdown.dur : undefined;
     applyTr(buildTr(a, isLandscape, dropdownDur));
   });
   createEffect(() => { const b = box(); if (!b) return; applyBox(b); });
@@ -527,15 +680,16 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     const isOpen = fmtOpen();
     const sOpen = settingsOpen();
     const rHas = hasResult();
+    const isConv = appState.converting;
     if (vw === 0 || vh === 0 || !untrack(box)) return;
     // When dropdown opens, push the video top down by the height of the dropdown content.
     // nItems is always FORMATS.length - 1 (exactly one format is selected/excluded).
     let extraTopPx = 0;
-    if (isOpen && !rHas) {
+    if (isOpen && !rHas && !isConv) {
       const nItems = FORMATS.length - 1;
       extraTopPx = 4 + nItems * 20 + (nItems - 1) * 4;
     }
-    setBox(computeBox(vw, vh, props.video.width, props.video.height, l, extraTopPx, sOpen, rHas));
+    setBox(computeBox(vw, vh, props.video.width, props.video.height, l, extraTopPx, sOpen, rHas, isConv));
   });
 
   // Force-close settings and format dropdown when result is showing —
@@ -549,9 +703,18 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   });
 
   // Top bar (FormatPicker + RUN) hidden when a result is displayed.
+  // When returning from result → editor, delay the fade-in by the geometry
+  // animation duration so PROCESS doesn't flash over the top-right X icon
+  // before the top bar has expanded back to its full height.
   createEffect(() => {
     if (!topBarEl) return;
-    const show = !hasResult();
+    const show = !hasResult() && !appState.converting;
+    const dur = anim.dropdown.dur;
+    const opacityTr = show
+      ? `opacity ${dur}s ease ${dur}s`
+      : `opacity ${dur}s ease`;
+    const current = topBarEl.style.transition;
+    topBarEl.style.transition = current ? `${current}, ${opacityTr}` : opacityTr;
     topBarEl.style.opacity       = show ? '1' : '0';
     topBarEl.style.pointerEvents = show ? 'auto' : 'none';
   });
@@ -560,7 +723,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   // set by applyTr above, so the panel's geometry animates in sync with the
   // bbox. Here we just update the final opacity / pointer-events.
   createEffect(() => {
-    const open = settingsOpen();
+    const open = settingsOpen() && !appState.converting;
     if (!settingsEl) return;
     settingsEl.style.opacity = open ? '1' : '0';
     settingsEl.style.pointerEvents = open ? 'auto' : 'none';
@@ -611,6 +774,9 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     setAppState('uploadReady',    false);
     setAppState('estimatedBytes', null);
     setAppState('estimating',     false);
+    setAppState('previewUrl',     null);
+    setAppState('inputFormat',    null);
+    setAppState('needsProxy',     false);
     cancelEstimate();
     stopProgress();
     const a = anim; const b = box();
@@ -632,10 +798,20 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   // ── Run handler ─────────────────────────────────────────────────────────────
   const handleRun = async () => {
     if (isConverting()) return;
+    // Fast cut = stream-copy ffmpeg: the job finishes in a few hundred ms,
+    // so flashing the loading bar in and out looks broken. Skip the bbox
+    // morph entirely for fast cut — result bbox appears directly.
+    const isFastCut = appState.fastCut &&
+      (appState.inputFormat ?? '').toLowerCase() ===
+      (appState.outputFormat ?? '').toLowerCase();
+
     setIsConverting(true);
-    setAppState('converting',  true);
-    setAppState('progress',    0);
-    setAppState('progressMsg', 'Starting...');
+    setResultWasFastCut(isFastCut);
+    if (!isFastCut) {
+      setAppState('converting', true);
+      setAppState('progress',    0);
+      setAppState('progressMsg', 'Starting...');
+    }
     setResultUrl(null);
     setResultFilename(null);
 
@@ -646,11 +822,13 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       return;
     }
 
-    listenProgress(jobId, (url, filename) => {
+    listenProgress(jobId, (url, filename, outputSize) => {
       setResultUrl(url);
       setResultFilename(filename);
-      setIsConverting(false);
-      setAppState('converting', false);
+      if (outputSize != null) setResultSize(outputSize);
+      // Don't flip `converting` here — the smoothed-progress effect below
+      // does it once the loading bar's 3s animation has caught up to 100,
+      // so the result video can't appear mid-fill on a fast conversion.
     }, () => {
       setIsConverting(false);
       setAppState('converting', false);
@@ -675,27 +853,61 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     setAppState('estimatedBytes', null);
     setAppState('uploadReady',    false);
     setAppState('uploadJobId',    null);
+    setAppState('previewUrl',     null);
+    setAppState('inputFormat',    null);
+    setAppState('needsProxy',     false);
 
-    // ── Upload file to server immediately for estimation + conversion ─────────
-    if (props.video.file) {
+    // Default output = same format as input whenever we accept it as an output
+    // (gif, mp4, mov, mkv, webm, avi). For inputs we don't round-trip
+    // (m4v/flv/wmv/ts/mts/3gp/ogv/no-extension), default to mp4 — safest
+    // universal video container.
+    const srcName = props.video.file?.name ?? props.video.name ?? '';
+    const srcExt = (srcName.split('.').pop() || '').toLowerCase();
+    const SAMEFORMAT_OUTPUTS = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'gif'];
+    const pickedFormat = SAMEFORMAT_OUTPUTS.includes(srcExt) ? srcExt : 'mp4';
+    setAppState('outputFormat', pickedFormat as any);
+    const fmtUpper = pickedFormat.toUpperCase();
+    setFormat(fmtUpper);
+    setDisplayFormat(fmtUpper);
+
+    // ── Upload to server ───────────────────────────────────────────────────
+    // IdleView now handles both file upload (XHR + progress bar) and URL
+    // fetch (SSE + progress bar) BEFORE transitioning here, so uploadReady
+    // should already be true. The fallback below covers legacy callers that
+    // transition straight into EditorView without uploading.
+    if (!appState.uploadReady && props.video.file) {
       uploadFile(props.video.file).then(result => {
         if (result) {
           setAppState('uploadJobId',  result.jobId);
           setAppState('currentJobId', result.jobId);
           setAppState('uploadReady',  true);
+          setAppState('inputFormat',  result.inputFormat);
+          setAppState('needsProxy',   !!result.needsProxy);
+          if (result.needsProxy) {
+            waitForPreview(result.jobId).then(url => {
+              if (url) setAppState('previewUrl', url);
+            });
+          }
         }
       });
-    } else if (props.video.url && appState.currentJobId) {
-      // URL mode: file already on server from /fetch
+    } else if (!appState.uploadReady && props.video.url && appState.currentJobId) {
+      // URL mode fallback (IdleView should have already set these).
       setAppState('uploadJobId', appState.currentJobId);
       setAppState('uploadReady', true);
+      setAppState('inputFormat', 'mp4');
     }
 
     // ── Video setup ────────────────────────────────────────────────────────────
+    // loadedmetadata fires on each src change — when the preview proxy swaps
+    // in (gif/avi inputs), we rebuild the trim range and thumbnail strip
+    // against the playable URL. extractFrames uses the video's current src so
+    // it always operates on something the browser can decode.
     videoRef.addEventListener('loadedmetadata', () => {
       const d = videoRef.duration;
-      setDuration(d); setTrimStart(0); setTrimEnd(d);
-      extractFrames(props.video.objectUrl, d, 20).then(setFrames);
+      if (!isFinite(d) || d <= 0) return;
+      setDuration(d);
+      if (trimEnd() === 0 || trimEnd() > d) { setTrimStart(0); setTrimEnd(d); }
+      extractFrames(videoRef.currentSrc || effectiveSrc(), d, 20).then(setFrames);
     });
 
     let rafId = 0;
@@ -744,6 +956,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     setResultUrl(null);
     setResultFilename(null);
     setResultSize(null);
+    setResultWasFastCut(false);
     setIsConverting(false);
     setAppState('converting', false);
     setAppState('progress', 0);
@@ -758,6 +971,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   createEffect(() => {
     const url = resultUrl();
     if (!url) { setResultSize(null); return; }
+    if (resultSize() != null) return; // already set from SSE outputSize
     (async () => {
       try {
         const res = await fetch(url, { method: 'HEAD' });
@@ -864,25 +1078,24 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
         .download-chip:hover .download-arrow {
           animation: download-arrow-bounce 1s cubic-bezier(0.22, 1.15, 0.5, 1) infinite;
         }
+        /* Play/pause flash: brief icon burst centered on the result video. */
+        @keyframes play-flash {
+          0%   { opacity: 0; transform: scale(0.7); }
+          20%  { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.4); }
+        }
+        .play-flash {
+          animation: play-flash 0.5s ease-out forwards;
+        }
       `}</style>
 
       {/* ── Bounding box (video + overlay) ─────────────────────────────────── */}
       <div ref={bboxEl} style={{ position: 'absolute', overflow: 'hidden', '-webkit-app-region': 'no-drag' } as any}>
-        {/* Input video — kept mounted across result transitions so playback
-            state, refs, and event listeners survive. Faded out in result mode. */}
-        <video
-          ref={el => { videoRef = el; setVideoEl(el); }}
-          src={props.video.objectUrl}
-          autoplay muted playsinline
-          style={{
-            width: '100%', height: '100%', display: 'block', 'object-fit': 'cover',
-            opacity: hasResult() ? '0' : '1',
-            transition: 'opacity 0.3s ease',
-          }}
-        />
-
-        {/* Result layer — dotted background + floating processed media.
-            Only mounted while a result is present. */}
+        {/* Dotted background — rendered FIRST so it sits behind the input
+            video wrapper. In fast-cut result the video morphs into an
+            inset frame and the dotted bg peeks through the surrounding
+            area; for non-fast-cut results the faded-to-0 input video lets
+            the dots show through on the whole bbox. */}
         <Show when={hasResult()}>
           <div
             style={{
@@ -894,11 +1107,70 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               animation: 'result-fade-in 0.3s ease both',
             } as any}
           />
+        </Show>
+
+        {/* Input video — kept mounted across result transitions so playback
+            state, refs, and event listeners survive. Faded out in result mode.
+            src is reactive so the preview proxy (gif/avi/… inputs) swaps in
+            automatically once the server finishes generating it. */}
+        {/* Wrapper handles the position/inset morph; the <video> inside
+            stays at 100%/100% so object-fit:cover keeps working. For the
+            fast-cut result state the wrapper's top/left/right/bottom are
+            computed so the wrapper itself takes the video's true aspect
+            ratio inside the inset area — no letterbox, no crop, just a
+            frame that matches the processed video's real proportions. */}
+        <div style={{
+          position: 'absolute',
+          top:    hasResult() && resultWasFastCut() ? `${fastCutWrap().t}px`  : '0',
+          left:   hasResult() && resultWasFastCut() ? `${fastCutWrap().l}px`  : '0',
+          right:  hasResult() && resultWasFastCut() ? `${fastCutWrap().r}px`  : '0',
+          bottom: hasResult() && resultWasFastCut() ? `${fastCutWrap().bt}px` : '0',
+          opacity: (hasResult() && !resultWasFastCut()) || appState.converting ? '0' : '1',
+          'pointer-events': hasResult() && resultWasFastCut() ? 'auto' : 'none',
+          transition: fastCutWrapTr(),
+        }}>
+          <video
+            ref={el => { videoRef = el; setVideoEl(el); }}
+            src={effectiveSrc()}
+            autoplay muted playsinline
+            classList={{
+              'result-media': hasResult() && resultWasFastCut(),
+              'is-pressed':   hasResult() && resultWasFastCut() && isResultPressed(),
+            }}
+            draggable={hasResult() && resultWasFastCut()}
+            {...(hasResult() && resultWasFastCut() ? resultMediaEvents : {})}
+            style={{
+              width: '100%', height: '100%', display: 'block', 'object-fit': 'cover',
+            }}
+          />
+        </div>
+
+        {/* Converting layer — CarrierBricks fills the morphed bbox while
+            converting. The catchup effect above holds `converting` true
+            until the smoothed bar reaches the real target, so unmounting
+            purely on `converting` keeps the bar visible through the ramp
+            and then cleanly removes it — no stale "empty bricks" overlay
+            if smoothing ever stalls.
+            Fade-in delayed so the bar only appears once the bbox has finished
+            its staggered morph into bar shape (p1+p2_delay+p2 ≈ 0.70s). */}
+        <Show when={appState.converting}>
+          <div style={{
+            position: 'absolute', inset: '0',
+            animation: `result-fade-in 0.2s ease ${anim.timing.p1_dur + anim.timing.p2_delay + anim.timing.p2_dur}s both`,
+          } as any}>
+            <CarrierBricks progress={smoothedProgress()} height={CONVERTING_BAR_H_PX} />
+          </div>
+        </Show>
+
+        {/* Floating result media — separate element only for non-fast-cut
+            results. For fast-cut the input <video> above has already morphed
+            into this position, so rendering a second video would stack them. */}
+        <Show when={hasResult() && !resultWasFastCut()}>
           <div
             style={{
               position: 'absolute',
-              top: `${RESULT_MEDIA_INSET}px`, left: `${RESULT_MEDIA_INSET}px`,
-              right: `${RESULT_MEDIA_INSET}px`, bottom: `${RESULT_MEDIA_INSET}px`,
+              top: `${resultInset()}px`, left: `${resultInset()}px`,
+              right: `${resultInset()}px`, bottom: `${resultInset()}px`,
               display: 'flex', 'align-items': 'center', 'justify-content': 'center',
               'pointer-events': 'none',
               animation: 'result-fade-in 0.3s ease both',
@@ -908,8 +1180,9 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               when={appState.outputFormat === 'gif'}
               fallback={
                 <video
+                  ref={el => { resultVideoRef = el; }}
                   src={resultUrl()!}
-                  controls autoplay loop playsinline
+                  autoplay loop playsinline
                   draggable={true}
                   classList={{ 'result-media': true, 'is-pressed': isResultPressed() }}
                   {...resultMediaEvents}
@@ -934,6 +1207,35 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
                 }}
               />
             </Show>
+            <Show when={flashIcon() && flashKey()} keyed>
+              {() => (
+                <div
+                  class="play-flash"
+                  style={{
+                    position: 'absolute',
+                    'pointer-events': 'none',
+                    display: 'flex',
+                    'align-items': 'center',
+                    'justify-content': 'center',
+                    width: '72px', height: '72px',
+                    'border-radius': '50%',
+                    background: 'rgba(0,0,0,0.55)',
+                    color: '#fff',
+                  }}
+                >
+                  {flashIcon() === 'play' ? (
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  ) : (
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <rect x="6" y="5" width="4" height="14" />
+                      <rect x="14" y="5" width="4" height="14" />
+                    </svg>
+                  )}
+                </div>
+              )}
+            </Show>
           </div>
         </Show>
 
@@ -950,11 +1252,15 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
           position: 'absolute', inset: '0',
           display: 'flex', 'flex-direction': 'column',
           'justify-content': 'space-between',
-          padding: '24px',
+          padding: `${bboxPad()}px`,
           'pointer-events': 'none',
           'box-sizing': 'border-box',
         }}>
-          <div style={{ display: 'flex', 'justify-content': 'space-between', 'align-items': 'flex-start', width: '100%' }}>
+          <div style={{
+            display: 'flex', 'justify-content': 'space-between', 'align-items': 'flex-start', width: '100%',
+            opacity: appState.converting ? '0' : '1',
+            transition: 'opacity 0.3s ease',
+          }}>
             <div style={{ position: 'relative' }}>
               <div style={{
                 display: 'flex', 'flex-direction': 'column',
@@ -1010,7 +1316,12 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               relative container so the delta row anchors to the bottom edge
               of the TrimRow's reserved space, keeping vertical alignment
               stable across the cross-fade. */}
-          <div style={{ position: 'relative', 'align-self': 'stretch' }}>
+          <div style={{
+            position: 'relative', 'align-self': 'stretch',
+            opacity: appState.converting ? '0' : '1',
+            transition: 'opacity 0.3s ease',
+            'pointer-events': appState.converting ? 'none' : 'auto',
+          }}>
             <div style={{
               opacity: hasResult() ? '0' : '1',
               transition: 'opacity 0.3s ease',
@@ -1065,18 +1376,17 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
                   'pointer-events': 'auto',
                   display: 'inline-flex',
                   'align-items': 'center',
-                  gap: '6px',
+                  gap: '2px',
                   background: ACCENT, color: BG,
                   'font-family': MONO, 'font-size': '16px', 'line-height': '20px',
-                  padding: '0 6px',
+                  'white-space': 'nowrap',
                   cursor: 'pointer',
                 }}
               >
                 <span>DOWNLOAD</span>
-                {/* Down-arrow glyph — imported from the shared download.svg
-                    asset. Fill uses BG so the glyph reads cream on the
-                    ACCENT chip; class="download-arrow" hooks the hover
-                    bounce keyframe in the <style> block above. */}
+                {/* Down-arrow glyph — sized to match the "↓" character used
+                    in other chips so the button reads as a single Chip unit
+                    rather than a padded button. */}
                 <svg
                   class="download-arrow"
                   width={10} height={11}
@@ -1107,10 +1417,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       </div>
 
       <SettingsColumn ref={el => settingsEl = el} videoEl={videoEl()} open={settingsOpen()} isPortrait={!isLandscape} />
-
-      <Show when={isConverting()}>
-        <ConvertingOverlay />
-      </Show>
 
       {/* ── Guide lines ─────────────────────────────────────────────────────── */}
       <GuideLine orientation="v" ref={el => vLineL = el} />

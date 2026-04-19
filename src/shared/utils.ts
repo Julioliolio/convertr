@@ -1,5 +1,54 @@
+import { Accessor, createSignal, onCleanup, onMount } from 'solid-js';
+
 /** Format seconds as a short string, e.g. "12s" */
 export const fmtDuration = (s: number) => `${Math.round(s)}s`;
+
+/**
+ * Smooths a target progress signal so the displayed value ramps continuously
+ * at a max rate of 100/minDurationMs % per ms. Guarantees the visible 0→100
+ * sweep takes at least `minDurationMs`, even if the source jumps.
+ *
+ * - target rises faster than rate → displayed lags, catches up smoothly
+ * - target ≤ displayed (reset/cancel) → displayed snaps down even when inactive
+ * - optional `active` gate:
+ *   • inactive: ramping is paused; displayed holds at its current value
+ *     (still snaps DOWN on a target reset so a new run starts from 0)
+ *   • inactive → active transition: displayed resets to 0, so the next
+ *     ramp begins from zero rather than carrying over from a prior run
+ */
+export function useSmoothedProgress(
+  target: Accessor<number>,
+  minDurationMs = 3000,
+  active?: Accessor<boolean>,
+): Accessor<number> {
+  const maxRatePerMs = 100 / minDurationMs;
+  const [displayed, setDisplayed] = createSignal(0);
+  let wasActive = active ? active() : true;
+
+  onMount(() => {
+    let raf = 0;
+    let lastT = performance.now();
+    const tick = (now: number) => {
+      const dt = now - lastT;
+      lastT = now;
+      const isActive = active ? active() : true;
+      if (isActive && !wasActive) setDisplayed(0);
+      wasActive = isActive;
+      const t = target();
+      const d = displayed();
+      if (t <= d) {
+        setDisplayed(t);
+      } else if (isActive) {
+        setDisplayed(Math.min(t, d + maxRatePerMs * dt));
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    onCleanup(() => cancelAnimationFrame(raf));
+  });
+
+  return displayed;
+}
 
 /** Format byte count as a human-readable MB string */
 export const fmtBytes = (bytes: number) => {
@@ -12,6 +61,7 @@ export const fmtBytes = (bytes: number) => {
 /**
  * Extract N evenly-spaced thumbnail frames from a video source URL.
  * Returns an array of base64 data-URLs (JPEG, 0.8 quality).
+ * Resolves with [] if the source can't be decoded (e.g. gif given to <video>).
  */
 export const extractFrames = (src: string, duration: number, count: number): Promise<string[]> =>
   new Promise((resolve) => {
@@ -21,9 +71,17 @@ export const extractFrames = (src: string, duration: number, count: number): Pro
     vid.src = src; vid.muted = true; vid.preload = 'auto';
     const results: string[] = [];
     let idx = 0; let thumbW = 24;
-    const seekNext = () => { if (idx >= count) { resolve(results); return; } vid.currentTime = (idx / count) * duration + 0.01; };
+    let resolved = false;
+    const finish = (out: string[]) => { if (resolved) return; resolved = true; resolve(out); };
+    const seekNext = () => { if (idx >= count) { finish(results); return; } vid.currentTime = (idx / count) * duration + 0.01; };
     vid.addEventListener('seeked', () => { ctx.drawImage(vid, 0, 0, thumbW, 24); results.push(canvas.toDataURL('image/jpeg', 0.8)); idx++; seekNext(); });
-    vid.addEventListener('loadedmetadata', () => { thumbW = Math.round(24 * vid.videoWidth / vid.videoHeight); canvas.width = thumbW; canvas.height = 24; seekNext(); });
+    vid.addEventListener('loadedmetadata', () => {
+      if (!vid.videoWidth || !vid.videoHeight) { finish([]); return; }
+      thumbW = Math.round(24 * vid.videoWidth / vid.videoHeight);
+      canvas.width = thumbW; canvas.height = 24;
+      seekNext();
+    });
+    vid.addEventListener('error', () => finish([]));
   });
 
 // ── Scramble text animation ───────────────────────────────────────────────────

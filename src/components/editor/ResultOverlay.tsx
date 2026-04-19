@@ -1,4 +1,4 @@
-import { Component, Show } from 'solid-js';
+import { Component, Show, onCleanup, onMount } from 'solid-js';
 import { appState } from '../../state/app';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
 
@@ -8,7 +8,20 @@ const ResultOverlay: Component<{
   url: string;
   filename: string | null;
   onClose: () => void;
-}> = (p) => (
+}> = (p) => {
+  let videoRef: HTMLVideoElement | undefined;
+
+  const handleKey = (e: KeyboardEvent) => {
+    if (e.code === 'Space' && videoRef) {
+      e.preventDefault();
+      videoRef.paused ? videoRef.play() : videoRef.pause();
+    }
+  };
+
+  onMount(() => window.addEventListener('keydown', handleKey));
+  onCleanup(() => window.removeEventListener('keydown', handleKey));
+
+  return (
   <div style={{
     position: 'fixed', inset: '0',
     background: BG,
@@ -20,7 +33,7 @@ const ResultOverlay: Component<{
     <Show
       when={appState.outputFormat === 'gif'}
       fallback={
-        <video src={p.url} controls
+        <video ref={videoRef} src={p.url}
           style={{ 'max-width': '80%', 'max-height': '60vh', display: 'block' }} />
       }
     >
@@ -47,6 +60,7 @@ const ResultOverlay: Component<{
       >CLOSE</div>
     </div>
   </div>
-);
+  );
+};
 
 export default ResultOverlay;

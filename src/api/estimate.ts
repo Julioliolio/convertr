@@ -6,6 +6,8 @@ export interface EstimateParams {
   dither: string;
   crf: number;
   codec: string;
+  audio?: boolean;
+  fastCut?: boolean;
   trimStart: number;
   trimEnd: number;
 }

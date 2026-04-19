@@ -26,6 +26,8 @@ export async function startConversion(trimStart?: number, trimEnd?: number): Pro
     dither:       appState.dither,
     crf:          appState.crf,
     codec:        appState.codec,
+    audio:        appState.audio,
+    fastCut:      appState.fastCut,
     trimStart,
     trimEnd,
   };
@@ -58,6 +60,8 @@ export async function startConversion(trimStart?: number, trimEnd?: number): Pro
       form.append('dither', appState.dither);
       form.append('codec',  appState.codec);
       form.append('crf',    String(appState.crf));
+      form.append('audio',  String(appState.audio));
+      form.append('fastCut', String(appState.fastCut));
       if (widthPx > 0)      form.append('width',     String(widthPx));
       if (trimStart != null) form.append('trimStart', String(trimStart));
       if (trimEnd   != null) form.append('trimEnd',   String(trimEnd));

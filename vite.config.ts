@@ -15,7 +15,7 @@ export default defineConfig({
     proxy: (() => {
       const target = `http://localhost:${process.env.VITE_SERVER_PORT || '3000'}`;
       return Object.fromEntries(
-        ['/convert', '/convert-fetched', '/fetch', '/progress', '/serve', '/input', '/download', '/upload', '/estimate'].map(r => [r, target])
+        ['/convert', '/convert-fetched', '/fetch', '/progress', '/serve', '/input', '/download', '/upload', '/estimate', '/preview', '/preview-status'].map(r => [r, target])
       );
     })(),
   },

@@ -13,7 +13,8 @@ const {
 
 const {
   getDuration, getVideoMeta, buildGifFilters, runFFmpeg,
-  getCodecArgs, parseEncodingParams, serveJobFile,
+  getCodecArgs, getFastCutArgs, buildProxyArgs, isBrowserPlayable,
+  parseEncodingParams, serveJobFile,
 } = require('./server-utils');
 
 const app = express();
@@ -61,11 +62,28 @@ function cleanup(jobId, delay = 0) {
   return setTimeout(() => {
     const job = jobs.get(jobId);
     if (!job) return;
-    [job.inputPath, job.palettePath, job.outputPath].forEach(f => {
+    [job.inputPath, job.palettePath, job.outputPath, job.previewPath].forEach(f => {
       if (f) try { fs.unlinkSync(f); } catch {}
     });
     jobs.delete(jobId);
   }, delay);
+}
+
+// Generate a small h264/mp4 the browser can play, for inputs whose native
+// container/codec isn't supported by <video> (gif, avi, flv, wmv, ts, mts, …).
+// Returns the preview path if generated, or null if the original is already
+// playable (caller then falls back to the original URL).
+async function ensurePreviewProxy(jobId, inputPath) {
+  const ext = path.extname(inputPath).replace(/^\./, '').toLowerCase();
+  if (isBrowserPlayable(ext)) return null;
+  const previewPath = path.join(TEMP_DIR, `${jobId}-preview.mp4`);
+  try {
+    await runFFmpeg(buildProxyArgs(inputPath, previewPath));
+    return previewPath;
+  } catch (err) {
+    console.error(`[preview] proxy generation failed for ${jobId}:`, err.message);
+    return null;
+  }
 }
 
 // ── yt-dlp: download video from URL ─────────────────────────────────────────
@@ -153,19 +171,30 @@ app.post('/fetch', async (req, res) => {
 
     const inputSize = fs.statSync(inputPath).size;
     const meta = await getVideoMeta(inputPath);
+    const inputExt = path.extname(inputPath).replace(/^\./, '').toLowerCase();
     const job = jobs.get(jobId);
     if (job) {
       job.status = 'downloaded';
       job.inputPath = inputPath;
       job.inputSize = inputSize;
       job.meta = meta;
+      job.inputFormat = inputExt;
       job.uploadTimer = setTimeout(() => cleanup(jobId), UPLOAD_CLEANUP_MS);
     }
+
+    // yt-dlp forces mp4 output in this path (see --merge-output-format mp4),
+    // so the downloaded file is always browser-playable. Preview proxy is
+    // still safe to skip here — but run it if format drifts later.
+    ensurePreviewProxy(jobId, inputPath).then(previewPath => {
+      const j = jobs.get(jobId);
+      if (j && previewPath) j.previewPath = previewPath;
+    });
 
     broadcast(jobId, {
       status: 'downloaded', progress: 30,
       message: 'Download complete. Ready to convert.',
       inputPath, inputSize, fileName: path.basename(inputPath), meta,
+      inputFormat: inputExt, needsProxy: !isBrowserPlayable(inputExt),
     });
   });
 });
@@ -178,17 +207,26 @@ app.post('/upload', upload.single('video'), async (req, res) => {
   const inputPath = req.file.path;
   const inputSize = req.file.size;
   const meta = await getVideoMeta(inputPath);
+  const inputExt = path.extname(req.file.originalname).replace(/^\./, '').toLowerCase();
   jobs.set(jobId, {
     status: 'uploaded', inputPath, inputSize, meta, outputPath: null,
+    inputFormat: inputExt, previewPath: null,
     uploadTimer: setTimeout(() => cleanup(jobId), UPLOAD_CLEANUP_MS),
   });
-  res.json({ jobId, meta });
+  // Fire-and-forget proxy generation. The client polls /preview/:jobId and
+  // falls back to the raw /input URL if the proxy isn't ready yet.
+  ensurePreviewProxy(jobId, inputPath).then(previewPath => {
+    const job = jobs.get(jobId);
+    if (job && previewPath) job.previewPath = previewPath;
+  });
+  const needsProxy = !isBrowserPlayable(inputExt);
+  res.json({ jobId, meta, inputFormat: inputExt, needsProxy });
 });
 
 // ── Estimate output size ────────────────────────────────────────────────────
 
 app.post('/estimate', async (req, res) => {
-  const { jobId, outputFormat: fmt, fps, width, dither, crf, codec, trimStart: tsRaw, trimEnd: teRaw } = req.body;
+  const { jobId, outputFormat: fmt, fps, width, dither, crf, codec, audio, fastCut, trimStart: tsRaw, trimEnd: teRaw } = req.body;
   const job = jobs.get(jobId);
   if (!job || !job.inputPath || !fs.existsSync(job.inputPath)) {
     return res.status(404).json({ error: 'Job not found or file missing' });
@@ -204,6 +242,16 @@ app.post('/estimate', async (req, res) => {
   const trimStart = tsRaw != null ? parseFloat(tsRaw) : 0;
   const trimEnd   = teRaw != null ? parseFloat(teRaw) : fullDuration;
   const trimDuration = Math.max(0.1, trimEnd - trimStart);
+
+  // Fast-cut shortcut: we re-mux with `-c copy`, so output bitrate ≈ input
+  // bitrate. Skipping the sample-encode path keeps the estimate near-instant
+  // and gives a truthful number for the trim-only case.
+  const inputExt = (path.extname(job.inputPath).replace(/^\./, '') || '').toLowerCase();
+  const fastCutFlag = fastCut === true || fastCut === 'true' || fastCut === 1 || fastCut === '1';
+  if (fastCutFlag && outputFormat !== 'gif' && inputExt === outputFormat && job.inputSize && fullDuration > 0) {
+    const bytesPerSec = job.inputSize / fullDuration;
+    return res.json({ estimatedBytes: Math.round(bytesPerSec * trimDuration) });
+  }
 
   const perSampleDur = Math.min(ESTIMATE_SAMPLE_DUR, trimDuration);
   let samplePoints;
@@ -259,7 +307,8 @@ app.post('/estimate', async (req, res) => {
     } else {
       const w = width === 'original' ? -1 : Math.min(1920, Math.max(240, parseInt(width) || -1));
       const crfVal = Math.min(51, Math.max(0, parseInt(crf) || 23));
-      const codecArgs = getCodecArgs(outputFormat, { crf: crfVal, codec: codec || 'h264', width: w, fps });
+      const audioKeep = audio !== false && audio !== 'false' && audio !== 0 && audio !== '0';
+      const codecArgs = getCodecArgs(outputFormat, { crf: crfVal, codec: codec || 'h264', width: w, fps, audio: audioKeep });
       const outPaths = samplePoints.map((_, i) => samplePath(i, outputFormat));
       const sizes = await Promise.all(samplePoints.map((start, i) =>
         runEstFFmpegTo(
@@ -286,7 +335,7 @@ app.post('/estimate', async (req, res) => {
 // ── Convert from a previously fetched/uploaded file ─────────────────────────
 
 app.post('/convert-fetched', async (req, res) => {
-  const { jobId, outputFormat: fmt, fps, width, dither, crf, codec, trimStart, trimEnd } = req.body;
+  const { jobId, outputFormat: fmt, fps, width, dither, crf, codec, audio, fastCut, trimStart, trimEnd } = req.body;
   const job = jobs.get(jobId);
 
   if (!job || !job.inputPath || !fs.existsSync(job.inputPath)) {
@@ -305,7 +354,7 @@ app.post('/convert-fetched', async (req, res) => {
 
   res.json({ jobId });
 
-  runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, { fps, width, dither, crf, codec, trimStart, trimEnd });
+  runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, { fps, width, dither, crf, codec, audio, fastCut, trimStart, trimEnd });
 });
 
 // ── Convert from uploaded file ──────────────────────────────────────────────
@@ -335,6 +384,15 @@ function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, op
   const hasTrim   = trimStart != null && trimEnd != null && trimEnd > trimStart;
   const trimArgs  = hasTrim ? ['-ss', String(trimStart), '-to', String(trimEnd)] : [];
   const trimDuration = hasTrim ? (trimEnd - trimStart) : null;
+
+  // Fast-cut path: user picked "same format out as in + no re-encode". Requires
+  // trim (no-op without it) and a browser-ish video container. Stream-copy
+  // avoids the re-encode cost entirely — cut points snap to the nearest
+  // keyframe before the requested start. For GIF we never fast-cut; the
+  // palette pass always needs re-encoding.
+  const inputExt = (path.extname(inputPath).replace(/^\./, '') || '').toLowerCase();
+  const fastCutRequested = opts.fastCut === true || opts.fastCut === 'true' || opts.fastCut === 1 || opts.fastCut === '1';
+  const fastCutEligible  = fastCutRequested && hasTrim && outputFormat !== 'gif' && inputExt === outputFormat;
 
   if (outputFormat === 'gif') {
     // ── GIF: 2-pass palette pipeline ──
@@ -394,6 +452,7 @@ function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, op
     const crfVal = Math.min(51, Math.max(0, parseInt(opts.crf) || 23));
     const codec = opts.codec || 'h264';
     const fpsOpt = opts.fps;
+    const audio = opts.audio !== false && opts.audio !== 'false' && opts.audio !== 0 && opts.audio !== '0';
 
     const job = jobs.get(jobId);
     Object.assign(job, { status: 'queued', progress: 0, message: 'Starting...', outputPath, outputFormat });
@@ -405,16 +464,30 @@ function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, op
         const estFrames = Math.max(1, Math.round(duration * 30));
 
         job.status = 'encoding';
-        broadcast(jobId, { status: 'encoding', progress: 35, message: 'Encoding...' });
-
-        const codecArgs = getCodecArgs(outputFormat, { crf: crfVal, codec, width: w, fps: fpsOpt });
-
-        await runFFmpeg([
-          ...trimArgs, '-i', inputPath, ...codecArgs, outputPath,
-        ], (frame) => {
-          const pct = 35 + Math.min(63, Math.round((frame / estFrames) * 63));
-          broadcast(jobId, { status: 'encoding', progress: pct, message: `Encoding frame ${frame}...` });
+        broadcast(jobId, {
+          status: 'encoding', progress: 35,
+          message: fastCutEligible ? 'Fast-cutting…' : 'Encoding...',
         });
+
+        if (fastCutEligible) {
+          // -ss/-to BEFORE -i enables fast keyframe seek; combined with
+          // `-c copy` this re-muxes rather than re-encodes. Output is the
+          // original quality; cut points snap to the nearest keyframe ≤ ss.
+          await runFFmpeg([
+            ...trimArgs, '-i', inputPath, ...getFastCutArgs(audio), outputPath,
+          ], (frame) => {
+            const pct = 35 + Math.min(63, Math.round((frame / estFrames) * 63));
+            broadcast(jobId, { status: 'encoding', progress: pct, message: `Copying frame ${frame}…` });
+          });
+        } else {
+          const codecArgs = getCodecArgs(outputFormat, { crf: crfVal, codec, width: w, fps: fpsOpt, audio });
+          await runFFmpeg([
+            ...trimArgs, '-i', inputPath, ...codecArgs, outputPath,
+          ], (frame) => {
+            const pct = 35 + Math.min(63, Math.round((frame / estFrames) * 63));
+            broadcast(jobId, { status: 'encoding', progress: pct, message: `Encoding frame ${frame}...` });
+          });
+        }
 
         const outputSize = fs.statSync(outputPath).size;
         job.status = 'done';
@@ -472,6 +545,23 @@ app.get('/progress/:jobId', (req, res) => {
 app.get('/serve/:jobId',    (req, res) => serveJobFile(jobs, req, res, 'outputPath'));
 app.get('/input/:jobId',    (req, res) => serveJobFile(jobs, req, res, 'inputPath'));
 app.get('/download/:jobId', (req, res) => serveJobFile(jobs, req, res, 'outputPath', true));
+
+// Preview proxy — browser-playable h264 mp4 for inputs the <video> element
+// can't decode natively (gif, avi, flv, wmv, ts, mts, …). 404 until the
+// proxy finishes encoding; the client polls or waits on upload response.
+app.get('/preview/:jobId', (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job || !job.previewPath || !fs.existsSync(job.previewPath)) {
+    return res.status(404).json({ error: 'Preview not ready' });
+  }
+  res.sendFile(job.previewPath);
+});
+app.get('/preview-status/:jobId', (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ ready: false, error: 'Job not found' });
+  const ready = !!(job.previewPath && fs.existsSync(job.previewPath));
+  res.json({ ready, needsProxy: !isBrowserPlayable(job.inputFormat) });
+});
 
 // ── Expose output path for Electron native drag ────────────────────────────
 

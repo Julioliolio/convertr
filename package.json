@@ -32,6 +32,8 @@
       "electron-main.js",
       "preload.js",
       "server.js",
+      "server-utils.js",
+      "server-config.js",
       "public/**/*",
       "public-built/**/*",
       "node_modules/**/*"

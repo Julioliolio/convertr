@@ -2,6 +2,8 @@ import { Component, Show, createEffect, createMemo, createSignal, onCleanup, onM
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import { setAppState } from '../../state/app';
+import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
+import CarrierBricks from '../loading/CarrierBricks';
 
 // ── Guide positions ───────────────────────────────────────────────────────────
 const SPLASH = { GL: '2.8%',  GR: '97.2%', GT: '6.13%', GB: '92.4%'  };
@@ -16,15 +18,33 @@ function computeIdlePos(vw: number, vh: number) {
   return {
     gl: pct(x1, vw), gr: pct(x2, vw),
     gt: pct(y1, vh), gb: pct(y2, vh),
-    // Helper text: positioned 85.8% down the box height (preserves original design ratio)
-    helperTop: (y1 + (y2 - y1) * 0.858) + 'px',
+    // Anchor text 16px above the bottom guide so it always sits inside the bbox.
+    helperBottom: (vh - y2 + 16) + 'px',
+  };
+}
+
+// Bar-shape positions used when the bbox morphs into a loading bar during
+// upload / URL fetch. Mirrors the playground shortlist: 60vw × 80px centered.
+const LOADING_BAR_W_RATIO = 0.60;
+const LOADING_BAR_H_PX    = 80;
+function computeLoadingPos(vw: number, vh: number) {
+  const barW = vw * LOADING_BAR_W_RATIO;
+  const barH = LOADING_BAR_H_PX;
+  const x1 = (vw - barW) / 2;
+  const y1 = (vh - barH) / 2;
+  const x2 = x1 + barW;
+  const y2 = y1 + barH;
+  return {
+    gl: pct(x1, vw), gr: pct(x2, vw),
+    gt: pct(y1, vh), gb: pct(y2, vh),
+    helperBottom: (vh - y2 + 16) + 'px',
   };
 }
 
 import { ACCENT, BG } from '../../shared/tokens';
 import { CornerCrosshair, GuideLine } from '../../shared/ui';
 
-type Phase = 'splash' | 'contracting' | 'idle';
+type Phase = 'splash' | 'contracting' | 'idle' | 'loading';
 
 // ── Tracks whether the intro has already played this session ──────────────────
 // Module-level so it survives IdleView unmount/remount (e.g. after pressing X),
@@ -53,10 +73,108 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     if (vw <= 0 || vh <= 0) return computeIdlePos(1, 1); // safe fallback
     return computeIdlePos(vw, vh);
   });
+  const loadingPos = createMemo(() => {
+    const { vw, vh } = vp();
+    if (vw <= 0 || vh <= 0) return computeLoadingPos(1, 1);
+    return computeLoadingPos(vw, vh);
+  });
 
   // ── Phase state ────────────────────────────────────────────────────────────
   const [phase, setPhase] = createSignal<Phase>(hasLaunched ? 'idle' : 'splash');
   const isIdle = createMemo(() => phase() === 'idle');
+  const isLoading = createMemo(() => phase() === 'loading');
+
+  // ── Loading bar (time-driven, continuous) ────────────────────────────────
+  // One seamless ramp from 0 → 100. The pacer starts once the bbox → bar
+  // morph has completed (BAR_FADE_MS) so the bar appears at 0%, not mid-
+  // fill. Animates 0 → HOLD_AT over ANIMATE_MS (ease-out), holds there
+  // until the real job reports done, then closes HOLD_AT → 100 over
+  // FINISH_MS before firing the transition to EditorView. No gate resets,
+  // no smoothing jumps — single continuous animation.
+  const BAR_FADE_MS = 1050; // = (STAGGER_P1 + STAGGER_DELAY + STAGGER_P2) * 1000
+  const ANIMATE_MS = 3000;
+  const FINISH_MS  = 350;
+  const HOLD_AT    = 92;
+
+  const [loadingProgress, setLoadingProgress] = createSignal(0);
+  const [pendingTransition, setPendingTransition] = createSignal<(() => void) | null>(null);
+
+  type PacerPhase = 'idle' | 'animating' | 'holding' | 'finishing';
+  let pacerPhase: PacerPhase = 'idle';
+  let pacerStart = 0;
+  let finishStart = 0;
+  let pacerRaf = 0;
+
+  const easeOutQuad = (tt: number) => 1 - (1 - tt) * (1 - tt);
+
+  const pacerTick = (now: number) => {
+    if (pacerPhase === 'animating') {
+      const tt = Math.min(1, (now - pacerStart) / ANIMATE_MS);
+      setLoadingProgress(easeOutQuad(tt) * HOLD_AT);
+      if (tt >= 1) {
+        if (pendingTransition()) {
+          pacerPhase = 'finishing';
+          finishStart = now;
+        } else {
+          pacerPhase = 'holding';
+        }
+      }
+    } else if (pacerPhase === 'holding') {
+      if (pendingTransition()) {
+        pacerPhase = 'finishing';
+        finishStart = now;
+      }
+    } else if (pacerPhase === 'finishing') {
+      const tt = Math.min(1, (now - finishStart) / FINISH_MS);
+      setLoadingProgress(HOLD_AT + (100 - HOLD_AT) * tt);
+      if (tt >= 1) {
+        const fire = pendingTransition();
+        setPendingTransition(null);
+        pacerPhase = 'idle';
+        pacerRaf = 0;
+        if (fire) fire();
+        return;
+      }
+    }
+    pacerRaf = requestAnimationFrame(pacerTick);
+  };
+
+  // Run the pacer while phase is 'loading'. Starts AFTER the bbox → bar
+  // morph so the bar begins at 0%. Cleanup cancels the RAF and resets.
+  createEffect(() => {
+    if (!isLoading()) {
+      if (pacerRaf) { cancelAnimationFrame(pacerRaf); pacerRaf = 0; }
+      pacerPhase = 'idle';
+      setLoadingProgress(0);
+      return;
+    }
+    const start = setTimeout(() => {
+      pacerPhase = 'animating';
+      pacerStart = performance.now();
+      setLoadingProgress(0);
+      pacerRaf = requestAnimationFrame(pacerTick);
+    }, BAR_FADE_MS);
+    onCleanup(() => {
+      clearTimeout(start);
+      if (pacerRaf) { cancelAnimationFrame(pacerRaf); pacerRaf = 0; }
+      pacerPhase = 'idle';
+    });
+  });
+
+  const startPacedLoading = () => {
+    setPendingTransition(null);
+  };
+
+  // Call when the real work (XHR or SSE) has completed successfully. The
+  // pacer fires the transition after its close-out animation finishes.
+  const finishPacedLoading = (onDone: () => void) => {
+    // Signal setter treats a raw function as an updater; wrap to store the fn.
+    setPendingTransition(() => onDone);
+  };
+
+  const stopPacedLoading = () => {
+    setPendingTransition(null);
+  };
 
   // Timeout refs so we can cancel and restart on replay
   let t1 = 0, t2 = 0;
@@ -98,28 +216,52 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     onCleanup(() => ro.disconnect());
   });
 
-  // Guide positions driven by phase — idle positions are computed from live viewport size
-  const gl = createMemo(() => phase() === 'splash' ? SPLASH.GL : idlePos().gl);
-  const gr = createMemo(() => phase() === 'splash' ? SPLASH.GR : idlePos().gr);
-  const gt = createMemo(() => phase() === 'splash' ? SPLASH.GT : idlePos().gt);
-  const gb = createMemo(() => phase() === 'splash' ? SPLASH.GB : idlePos().gb);
+  // Guide positions driven by phase — splash / idle / loading.
+  const gl = createMemo(() => {
+    if (phase() === 'splash')  return SPLASH.GL;
+    if (phase() === 'loading') return loadingPos().gl;
+    return idlePos().gl;
+  });
+  const gr = createMemo(() => {
+    if (phase() === 'splash')  return SPLASH.GR;
+    if (phase() === 'loading') return loadingPos().gr;
+    return idlePos().gr;
+  });
+  const gt = createMemo(() => {
+    if (phase() === 'splash')  return SPLASH.GT;
+    if (phase() === 'loading') return loadingPos().gt;
+    return idlePos().gt;
+  });
+  const gb = createMemo(() => {
+    if (phase() === 'splash')  return SPLASH.GB;
+    if (phase() === 'loading') return loadingPos().gb;
+    return idlePos().gb;
+  });
 
   // When remounting after a video cancel, skip the first transition so
   // guide lines and crosshairs don't animate from SPLASH to idle out of sync.
   let skipTransition = hasLaunched;
 
-  // Apply guide positions whenever phase or dial values change
+  // Apply guide positions whenever phase or dial values change.
+  // Staggered p1/p2 rhythm: horizontal axis (left) unfolds first, vertical
+  // axis (top) follows after p2_delay — matches the cinematic principle used
+  // by the editor. Skipped on the initial remount after a video cancel so
+  // the lines don't flicker from SPLASH → idle.
+  const STAGGER_P1 = 0.35;
+  const STAGGER_P2 = 0.35;
+  const STAGGER_DELAY = 0.35;
   createEffect(() => {
     const l = gl(), r = gr(), t = gt(), b = gb();
-    const dur = skipTransition ? '0s' : `${p.guides.dur}s`;
-    const tr = `${dur} ${guideEase}`;
+    const skip = skipTransition;
     if (skipTransition) skipTransition = false;
-    vLineL.style.transition = `left ${tr}`;
-    vLineR.style.transition = `left ${tr}`;
-    hLineT.style.transition = `top ${tr}`;
-    hLineB.style.transition = `top ${tr}`;
+    const trLeft = skip ? `0s ${guideEase}` : `${STAGGER_P1}s ${guideEase}`;
+    const trTop  = skip ? `0s ${guideEase}` : `${STAGGER_P2}s ${guideEase} ${STAGGER_DELAY}s`;
+    vLineL.style.transition = `left ${trLeft}`;
+    vLineR.style.transition = `left ${trLeft}`;
+    hLineT.style.transition = `top ${trTop}`;
+    hLineB.style.transition = `top ${trTop}`;
     [crossTL, crossTR, crossBL, crossBR].forEach(el => {
-      el.style.transition = `top ${tr}, left ${tr}`;
+      el.style.transition = `top ${trTop}, left ${trLeft}`;
     });
     vLineL.style.left = l;   vLineR.style.left = r;
     hLineT.style.top  = t;   hLineB.style.top  = b;
@@ -127,7 +269,9 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     crossTR.style.top  = `calc(${t} - 10px)`;  crossTR.style.left = `calc(${r} - 10px)`;
     crossBL.style.top  = `calc(${b} - 10px)`;  crossBL.style.left = `calc(${l} - 10px)`;
     crossBR.style.top  = `calc(${b} - 10px)`;  crossBR.style.left = `calc(${r} - 10px)`;
-    dotBg.style.transition = `left ${tr}, top ${tr}, width ${tr}, height ${tr}, opacity ${tr}`;
+    // Dot bg rides the same stagger: left/width on the horizontal phase,
+    // top/height on the vertical phase.
+    dotBg.style.transition = `left ${trLeft}, width ${trLeft}, top ${trTop}, height ${trTop}, opacity ${trLeft}`;
     dotBg.style.left   = l;
     dotBg.style.top    = t;
     dotBg.style.width  = `calc(${r} - ${l})`;
@@ -140,20 +284,85 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   let fileInputRef!: HTMLInputElement;
 
   const handleFile = (file: File) => {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const isGif = file.type === 'image/gif' || ext === 'gif';
+    const isVideo = file.type.startsWith('video/');
+    // Allow videos + GIFs only. Container formats without a MIME type (avi,
+    // flv, wmv, ts, mkv on some browsers) fall through the MIME check, so
+    // also accept known video extensions.
+    const VIDEO_EXTS = new Set(['mp4','mov','mkv','webm','avi','flv','wmv','ts','mts','m4v','3gp','ogv']);
+    if (!isGif && !isVideo && !VIDEO_EXTS.has(ext)) {
+      setFetchStatus('Unsupported file — videos or GIFs only');
+      setTimeout(() => setFetchStatus(null), 3000);
+      return;
+    }
     const objectUrl = URL.createObjectURL(file);
-    const vid = document.createElement('video');
-    vid.preload = 'metadata';
-    vid.src = objectUrl;
-    vid.onloadedmetadata = () => {
-      props.onVideoSelected({
-        file,
-        name: file.name,
-        sizeBytes: file.size,
-        width: vid.videoWidth,
-        height: vid.videoHeight,
-        objectUrl,
+
+    // Probe dimensions client-side in parallel so the transition to EditorView
+    // has fallback values if the server meta is missing a field. Server meta
+    // (from ffprobe) is preferred when available — more reliable for formats
+    // the browser can't decode natively (avi/flv/wmv/ts/…).
+    const probeDims = (): Promise<{ w: number; h: number }> => {
+      if (isGif) {
+        return new Promise(resolve => {
+          const img = new Image();
+          img.onload = () => resolve({ w: img.naturalWidth || 1280, h: img.naturalHeight || 720 });
+          img.onerror = () => resolve({ w: 1280, h: 720 });
+          img.src = objectUrl;
+        });
+      }
+      return new Promise(resolve => {
+        const vid = document.createElement('video');
+        vid.preload = 'metadata';
+        vid.src = objectUrl;
+        let done = false;
+        const bail = () => { if (done) return; done = true; resolve({ w: 1280, h: 720 }); };
+        const timer = setTimeout(bail, 1500);
+        vid.onloadedmetadata = () => {
+          if (done) return; done = true; clearTimeout(timer);
+          resolve({ w: vid.videoWidth || 1280, h: vid.videoHeight || 720 });
+        };
+        vid.onerror = () => { clearTimeout(timer); bail(); };
       });
     };
+
+    // Start the bar — bbox morphs from idle drop-zone into the 60vw × 80px bar.
+    setPhase('loading');
+    startPacedLoading();
+
+    Promise.all([
+      probeDims(),
+      uploadFileWithProgress(file),
+    ]).then(([dims, result]) => {
+      if (!result) {
+        stopPacedLoading();
+        setFetchStatus('Upload failed');
+        setTimeout(() => setFetchStatus(null), 3000);
+        setPhase('idle');
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      // Real upload finished — queue transition. Pacer fires it after the
+      // bar finishes its close-out animation (smooth HOLD_AT → 100).
+      finishPacedLoading(() => {
+        setAppState('uploadJobId',  result.jobId);
+        setAppState('currentJobId', result.jobId);
+        setAppState('uploadReady',  true);
+        setAppState('inputFormat',  result.inputFormat);
+        setAppState('needsProxy',   !!result.needsProxy);
+        if (result.needsProxy) {
+          waitForPreview(result.jobId).then(url => {
+            if (url) setAppState('previewUrl', url);
+          });
+        }
+        const w = result.meta?.width  || dims.w;
+        const h = result.meta?.height || dims.h;
+        props.onVideoSelected({
+          file, name: file.name, sizeBytes: file.size,
+          width: w, height: h, objectUrl,
+        });
+      });
+    });
   };
 
   const handleDrop = (e: DragEvent) => {
@@ -163,7 +372,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     if (file) handleFile(file);
   };
 
-  const handleDragOver = (e: DragEvent) => { e.preventDefault(); setDragOver(true); };
+  const handleDragOver = (e: DragEvent) => { e.preventDefault(); if (!isLoading()) setDragOver(true); };
   const handleDragLeave = () => setDragOver(false);
   const handleClick = () => { if (isIdle()) fileInputRef.click(); };
 
@@ -176,42 +385,61 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   const handlePaste = async (e: ClipboardEvent) => {
     const text = e.clipboardData?.getData('text');
     if (!text?.startsWith('http://') && !text?.startsWith('https://')) return;
+    if (isLoading()) return; // another job already in flight
 
-    setFetchStatus('Fetching…');
+    // Start the bar — bbox morphs into the loading bar shape.
+    setPhase('loading');
+    startPacedLoading();
+
+    const resetIdle = () => {
+      stopPacedLoading();
+      setPhase('idle');
+    };
+
     try {
       const res = await fetch('/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: text }),
       });
-      if (!res.ok) { setFetchStatus('Failed to fetch URL'); return; }
+      if (!res.ok) {
+        setFetchStatus('Failed to fetch URL');
+        setTimeout(() => setFetchStatus(null), 3000);
+        resetIdle();
+        return;
+      }
       const { jobId } = await res.json();
 
-      // Listen for download progress via SSE
+      // Listen for download progress via SSE. Server caps download progress
+      // at 30 (line 143 of server.js), so stretch to 0-100 for the bar fill.
       const sse = new EventSource(`/progress/${jobId}`);
       sse.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data);
-          if (data.message) setFetchStatus(data.message);
           if (data.error) {
             sse.close();
             setFetchStatus(`Error: ${data.message ?? 'Download failed'}`);
             setTimeout(() => setFetchStatus(null), 3000);
+            resetIdle();
             return;
           }
           if (data.status === 'downloaded') {
             sse.close();
-            setFetchStatus(null);
             const meta = data.meta ?? {};
-            // Store job id in app state so EditorView picks it up
-            setAppState('currentJobId', jobId);
-            props.onVideoSelected({
-              url: text,
-              name: data.fileName ?? text.split('/').pop() ?? 'video',
-              sizeBytes: data.inputSize ?? 0,
-              width:  meta.width  || 1280,
-              height: meta.height || 720,
-              objectUrl: `/input/${jobId}`,
+            finishPacedLoading(() => {
+              setAppState('currentJobId', jobId);
+              setAppState('uploadJobId', jobId);
+              setAppState('uploadReady', true);
+              setAppState('inputFormat', data.inputFormat ?? 'mp4');
+              setAppState('needsProxy', !!data.needsProxy);
+              props.onVideoSelected({
+                url: text,
+                name: data.fileName ?? text.split('/').pop() ?? 'video',
+                sizeBytes: data.inputSize ?? 0,
+                width:  meta.width  || 1280,
+                height: meta.height || 720,
+                objectUrl: `/input/${jobId}`,
+              });
             });
           }
         } catch { /* ignore */ }
@@ -220,10 +448,12 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         sse.close();
         setFetchStatus('Connection error');
         setTimeout(() => setFetchStatus(null), 3000);
+        resetIdle();
       };
     } catch {
       setFetchStatus('Failed to fetch URL');
       setTimeout(() => setFetchStatus(null), 3000);
+      resetIdle();
     }
   };
 
@@ -284,15 +514,39 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         <div style={armV} /><div style={armH} />
       </div>
 
+      {/* ── Loading bar (Option 5) — fills the morphed bbox while uploading
+          a local file or fetching a URL. Position mirrors the loadingPos
+          guides so it lines up with the bbox as it animates in. The fade-in
+          is delayed by the full stagger duration (p1_dur + p2_delay + p2_dur)
+          so the bar only appears once the bbox has finished morphing into
+          its bar shape. Fade-out is immediate. ──────────────────────────── */}
+      <div style={{
+        position: 'absolute',
+        left: loadingPos().gl,
+        top:  loadingPos().gt,
+        width:  `calc(${loadingPos().gr} - ${loadingPos().gl})`,
+        height: `calc(${loadingPos().gb} - ${loadingPos().gt})`,
+        opacity: isLoading() ? '1' : '0',
+        transition: isLoading()
+          ? `opacity ${p.helper_fade_dur}s ease ${STAGGER_P1 + STAGGER_DELAY + STAGGER_P2}s`
+          : `opacity ${p.helper_fade_dur}s ease`,
+        'pointer-events': isLoading() ? 'auto' : 'none',
+      }}>
+        <CarrierBricks progress={loadingProgress()} height={LOADING_BAR_H_PX} />
+      </div>
+
       {/* ── Helper text ───────────────────────────────────────────────────── */}
       <div style={{
-        position: 'absolute', top: idlePos().helperTop, left: '50%', translate: '-50% 0',
+        position: 'absolute', bottom: idlePos().helperBottom,
+        left: idlePos().gl, right: `calc(100% - ${idlePos().gr})`,
         display: 'flex', 'flex-direction': 'column', 'align-items': 'center',
+        'text-align': 'center',
+        overflow: 'hidden',
         opacity: isIdle() ? '1' : '0',
         transition: `opacity ${p.helper_fade_dur}s ease`,
       }}>
-        <span style={{ 'font-family': "'IBM Plex Mono', system-ui, monospace", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>DROP A FILE OR URL</span>
-        <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-weight': '500', 'font-size': '12px', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>click to browse or ctrl+v anywhere</span>
+        <span style={{ 'font-family': "'IBM Plex Mono', system-ui, monospace", 'font-weight': '500', 'font-size': 'clamp(9px, 2vw, 12px)', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>DROP A FILE OR URL</span>
+        <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-weight': '500', 'font-size': 'clamp(9px, 2vw, 12px)', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>click to browse or ctrl+v anywhere</span>
       </div>
 
       {/* ── URL fetch status ──────────────────────────────────────────────── */}
@@ -310,7 +564,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         </div>
       </Show>
 
-      <input ref={fileInputRef} type="file" accept="video/*,image/gif,image/*" style={{ display: 'none' }} onChange={handleFileInput} />
+      <input ref={fileInputRef} type="file" accept="video/*,image/gif,.mkv,.avi,.flv,.wmv,.ts,.mts,.m4v,.3gp,.ogv" style={{ display: 'none' }} onChange={handleFileInput} />
     </div>
   );
 };

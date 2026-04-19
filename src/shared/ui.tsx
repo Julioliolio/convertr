@@ -260,7 +260,7 @@ export const FormatButton: Component<{
       <svg
         width={8} height={12}
         viewBox="0 0 28 44" fill="none" preserveAspectRatio="none"
-        style={{ position: 'relative', 'z-index': '1', width: '8px', height: '12px', 'flex-shrink': '0' }}
+        style={{ position: 'relative', 'z-index': '1', width: '8px', height: '12px', 'flex-shrink': '0', overflow: 'visible' }}
       >
         <path ref={ref1!} fill={BG} style={{ transition: `fill ${(p.spring?.dur ?? 0.15) * 1000}ms ease-in-out` }} />
         <path ref={ref2!} fill={BG} style={{ transition: `fill ${(p.spring?.dur ?? 0.15) * 1000}ms ease-in-out` }} />
