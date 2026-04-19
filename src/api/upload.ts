@@ -13,10 +13,6 @@ export interface UploadResult {
   needsProxy: boolean;
 }
 
-export async function uploadFile(file: File): Promise<UploadResult | null> {
-  return uploadFileWithProgress(file);
-}
-
 // Upload with real-time byte progress. `onProgress` receives percentages in
 // [0, 100]. Uses XHR because fetch() has no upload-progress hook.
 export function uploadFileWithProgress(

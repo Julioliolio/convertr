@@ -58,6 +58,9 @@ export const fmtBytes = (bytes: number) => {
   return Math.round(mb) + ' MB';
 };
 
+/** Render `v / of` as a percentage string with 4 decimal places. */
+export const pct = (v: number, of: number) => (v / of * 100).toFixed(4) + '%';
+
 /**
  * Extract N evenly-spaced thumbnail frames from a video source URL.
  * Returns an array of base64 data-URLs (JPEG, 0.8 quality).

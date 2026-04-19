@@ -14,7 +14,7 @@ const {
 const {
   getDuration, getVideoMeta, buildGifFilters, runFFmpeg,
   getCodecArgs, getFastCutArgs, buildProxyArgs, isBrowserPlayable,
-  parseEncodingParams, serveJobFile,
+  serveJobFile,
 } = require('./server-utils');
 
 const app = express();

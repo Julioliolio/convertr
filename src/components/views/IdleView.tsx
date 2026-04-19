@@ -3,12 +3,11 @@ import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import { setAppState } from '../../state/app';
 import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
+import { pct } from '../../shared/utils';
 import CarrierBricks from '../loading/CarrierBricks';
 
 // ── Guide positions ───────────────────────────────────────────────────────────
 const SPLASH = { GL: '2.8%',  GR: '97.2%', GT: '6.13%', GB: '92.4%'  };
-
-const pct = (v: number, of: number) => (v / of * 100).toFixed(4) + '%';
 
 // Compute idle bounding box guide percentages from actual viewport dimensions.
 // Uses the same logic as bbox-calc.ts so the idle box is always properly centered
@@ -42,7 +41,7 @@ function computeLoadingPos(vw: number, vh: number) {
 }
 
 import { ACCENT, BG } from '../../shared/tokens';
-import { CornerCrosshair, GuideLine } from '../../shared/ui';
+import { Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
 
 type Phase = 'splash' | 'contracting' | 'idle' | 'loading';
 
@@ -460,12 +459,6 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   onMount(() => document.addEventListener('paste', handlePaste));
   onCleanup(() => document.removeEventListener('paste', handlePaste));
 
-  const armV = { position: 'absolute' as const, left: '9px', top: '0',  width: '2px',  height: '20px', background: ACCENT };
-  const armH = { position: 'absolute' as const, left: '0',  top: '9px', width: '20px', height: '2px',  background: ACCENT };
-
-  // Center crosshair (idle-only pulse) uses the local armV/armH so it shares
-  // exact geometry with the corner crosshairs.
-
   return (
     <div
       ref={rootEl}
@@ -510,8 +503,8 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       <CornerCrosshair ref={el => crossBR = el} />
 
       {/* ── Center crosshair (idle only) ──────────────────────────────────── */}
-      <div style={{ position: 'absolute', width: '20px', height: '20px', top: 'calc(50% - 10px)', left: 'calc(50% - 10px)', opacity: isIdle() ? '1' : '0', transition: 'opacity 0.3s ease' }}>
-        <div style={armV} /><div style={armH} />
+      <div style={{ position: 'absolute', top: 'calc(50% - 10px)', left: 'calc(50% - 10px)', opacity: isIdle() ? '1' : '0', transition: 'opacity 0.3s ease' }}>
+        <Cross />
       </div>
 
       {/* ── Loading bar (Option 5) — fills the morphed bbox while uploading

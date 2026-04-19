@@ -96,20 +96,6 @@ export const XSvg: Component<{ width?: number; height?: number }> = (p) => (
   </svg>
 );
 
-// ── Right arrow (process / go), 20 × 22 ──────────────────────────────────────
-
-export const ArrowSvg: Component<{ width?: number; height?: number }> = (p) => (
-  <svg
-    width={p.width ?? 20} height={p.height ?? 22}
-    viewBox="0 0 79 88" fill="none" xmlns="http://www.w3.org/2000/svg"
-    preserveAspectRatio="none"
-    style={{ width: `${p.width ?? 20}px`, height: `${p.height ?? 22}px`, 'flex-shrink': '0' }}
-  >
-    <rect x="0" width="78.198" height="87.165" fill={ACCENT} />
-    <path d="M64.984 43.583L43.739 64.796L39.49 60.553L53.481 46.582H0.009V40.582H53.481L39.49 26.613L43.739 22.37L64.984 43.583Z" fill="#FFFFFF" />
-  </svg>
-);
-
 // ── Settings dial (toggles video settings panel), 20 × 22 ───────────────────
 // Two visual states driven by `open`; silhouette is identical in both — only
 // the fill inverts (positive vs negative of the same shape):

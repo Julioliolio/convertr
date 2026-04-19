@@ -145,7 +145,7 @@ function getFastCutArgs(audio) {
 // the trim preview isn't silent if the source had sound.
 function buildProxyArgs(inputPath, outputPath) {
   return [
-    '-y', '-i', inputPath,
+    '-i', inputPath,
     '-vf', "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28',
     '-movflags', '+faststart',
@@ -153,27 +153,6 @@ function buildProxyArgs(inputPath, outputPath) {
     '-c:a', 'aac', '-b:a', '96k',
     outputPath,
   ];
-}
-
-// ── Encoding parameter parsing ──────────────────────────────────────────────
-
-function parseEncodingParams(body) {
-  const { VALID_OUTPUT } = require('./server-config');
-  const fmt = body.outputFormat;
-  const rawStart = body.trimStart != null ? parseFloat(body.trimStart) : null;
-  const rawEnd   = body.trimEnd   != null ? parseFloat(body.trimEnd)   : null;
-  return {
-    outputFormat: VALID_OUTPUT.includes(fmt) ? fmt : 'gif',
-    fps:       body.fps,
-    width:     body.width,
-    dither:    body.dither,
-    crf:       Math.min(51, Math.max(0, parseInt(body.crf) || 23)),
-    codec:     body.codec || 'h264',
-    audio:     body.audio !== false && body.audio !== 'false' && body.audio !== 0 && body.audio !== '0',
-    fastCut:   body.fastCut === true || body.fastCut === 'true' || body.fastCut === 1 || body.fastCut === '1',
-    trimStart: rawStart != null && !isNaN(rawStart) ? rawStart : null,
-    trimEnd:   rawEnd   != null && !isNaN(rawEnd)   ? rawEnd   : null,
-  };
 }
 
 // ── File serving helper ─────────────────────────────────────────────────────
@@ -202,6 +181,5 @@ module.exports = {
   getFastCutArgs,
   buildProxyArgs,
   isBrowserPlayable,
-  parseEncodingParams,
   serveJobFile,
 };

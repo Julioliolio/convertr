@@ -3,13 +3,13 @@ import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import { startConversion } from '../../api/convert';
 import { listenProgress, stopProgress } from '../../api/progress';
-import { uploadFile, waitForPreview } from '../../api/upload';
+import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
 import { fetchEstimate, cancelEstimate } from '../../api/estimate';
 import { appState, setAppState } from '../../state/app';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
 import { XSvg, SettingsSvg, Chip, Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
 import LoadingOverlay from '../LoadingOverlay';
-import { fmtBytes, extractFrames, scrambleText, useSmoothedProgress } from '../../shared/utils';
+import { fmtBytes, pct, extractFrames, scrambleText, useSmoothedProgress } from '../../shared/utils';
 import FormatPicker    from '../editor/FormatPicker';
 import TrimRow         from '../editor/TrimRow';
 import SettingsColumn  from '../editor/SettingsColumn';
@@ -17,8 +17,6 @@ import CarrierBricks   from '../loading/CarrierBricks';
 
 // Server-supported formats (lowercase server-side)
 const FORMATS = ['GIF', 'AVI', 'MP4', 'MOV', 'WEBM', 'MKV'];
-
-const pct = (v: number, of: number) => (v / of * 100).toFixed(4) + '%';
 
 // Space reserved above the video for the top bar (24px pad + 22px btn + 24px bottom margin).
 const TOP_BAR_H_PX = 70;
@@ -339,42 +337,19 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     return fmtBytes(bytes) + '?';
   };
 
-  // ── Size display with scramble animation ────────────────────────────────────
-  // displaySize holds only the prefix (digits or "..."), " MB" is rendered statically
-  const SCRAMBLE_CHARS = '0123456789!@#%&';
+  // displaySize holds only the prefix (digits or "..."). " MB" is rendered
+  // statically in the chip; stripped here before the scramble.
   const [displaySize, setDisplaySize] = createSignal('—');
   let scrambleRaf = 0;
-
-  // Strip trailing " MB" or "?" suffix before scrambling, add back in render
   const stripSuffix = (s: string) => s.replace(/ MB\??$/, '').replace(/\?$/, '');
 
   const scrambleTo = (target: string) => {
-    cancelAnimationFrame(scrambleRaf);
-    const from = displaySize();
-    const t = stripSuffix(target);
-    const len = Math.max(from.length, t.length);
-    const pad = (s: string) => s.padEnd(len, ' ');
-    const f = pad(from), tt = pad(t);
-    const totalFrames = 18;
-    const frameMs = 30;
-    let frame = 0;
-    let last = performance.now();
-
-    const tick = (now: number) => {
-      if (now - last < frameMs) { scrambleRaf = requestAnimationFrame(tick); return; }
-      last = now;
-      frame++;
-      if (frame >= totalFrames) { setDisplaySize(t.trimEnd() || '—'); return; }
-      const resolved = Math.floor((frame / totalFrames) * len);
-      const result = tt.split('').map((ch, i) => {
-        if (i < resolved) return tt[i];
-        if (f[i] === ' ' && tt[i] === ' ') return ' ';
-        return SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
-      }).join('').trimEnd();
-      setDisplaySize(result || '—');
-      scrambleRaf = requestAnimationFrame(tick);
-    };
-    scrambleRaf = requestAnimationFrame(tick);
+    const t = stripSuffix(target) || '—';
+    scrambleRaf = scrambleText(
+      [{ target: t, setter: setDisplaySize }],
+      scrambleRaf,
+      { frames: 18, frameMs: 30, chars: '0123456789!@#%&' },
+    );
   };
 
   // Run an estimate — call this explicitly (not reactively on trim)
@@ -404,11 +379,9 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   let estimateTimer = 0;
   createEffect(() => {
     const ready = appState.uploadReady; const jobId = appState.uploadJobId;
-    // Re-run whenever any conversion param changes
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    appState.outputFormat; appState.fps; appState.width; appState.vidWidth;
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    appState.crf; appState.dither; appState.codec; appState.audio; appState.fastCut;
+    // Touch every conversion param so Solid tracks this effect against them.
+    void appState.outputFormat; void appState.fps; void appState.width; void appState.vidWidth;
+    void appState.crf; void appState.dither; void appState.codec; void appState.audio; void appState.fastCut;
     clearTimeout(estimateTimer);
     if (!ready || !jobId || isDraggingHandle) return;
     estimateTimer = window.setTimeout(runEstimate, 400);
@@ -876,7 +849,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     // should already be true. The fallback below covers legacy callers that
     // transition straight into EditorView without uploading.
     if (!appState.uploadReady && props.video.file) {
-      uploadFile(props.video.file).then(result => {
+      uploadFileWithProgress(props.video.file).then(result => {
         if (result) {
           setAppState('uploadJobId',  result.jobId);
           setAppState('currentJobId', result.jobId);
