@@ -233,7 +233,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   let videoRef!: HTMLVideoElement;
   let resultVideoRef: HTMLVideoElement | undefined;
   const [videoEl, setVideoEl] = createSignal<HTMLVideoElement | undefined>();
-  let durationInputRef!: HTMLInputElement;
   let isDraggingHandle = false;
 
   const [duration,        setDuration]        = createSignal(0);
@@ -243,8 +242,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const [isPlaying,       setIsPlaying]       = createSignal(false);
   const [dragging,        setDragging]        = createSignal(false);
   const [frames,          setFrames]          = createSignal<string[]>([]);
-  const [editingDuration, setEditingDuration] = createSignal(false);
-  const [draftDuration,   setDraftDuration]   = createSignal('');
 
   // ── Effective video src: prefer the server-generated preview proxy when the
   // original isn't browser-playable (gif, avi, flv, wmv, ts, …). The memo is
@@ -311,7 +308,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   };
   onCleanup(() => { if (flashTimer) clearTimeout(flashTimer); });
 
-  const trimmedDuration = () => trimEnd() - trimStart();
 
   // ── Estimated output size ─────────────────────────────────────────────────────
 
@@ -401,24 +397,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const handleSeek = (t: number) => {
     videoRef.currentTime = Math.max(0, Math.min(t, duration()));
     setCurrentTime(videoRef.currentTime);
-  };
-
-  const shakeInput = () => {
-    durationInputRef.style.animation = 'none';
-    void durationInputRef.offsetWidth;
-    durationInputRef.style.animation = 'timeline-shake 0.35s ease';
-  };
-
-  const commitDuration = () => {
-    const parsed = parseFloat(draftDuration().replace(/[^0-9.]/g, ''));
-    const isValid = !isNaN(parsed) && parsed >= 1 && parsed <= duration() - trimStart();
-    if (isValid) {
-      setTrimEnd(Math.min(trimStart() + parsed, duration()));
-      setEditingDuration(false);
-    } else {
-      shakeInput();
-      setDraftDuration(String(Math.round(trimmedDuration())));
-    }
   };
 
   // ── Static config ────────────────────────────────────────────────────────────
@@ -897,7 +875,10 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     startLoop();
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !editingDuration()) { e.preventDefault(); togglePlay(); }
+      // Don't steal Space from focused text inputs (duration editor, etc.).
+      const focused = document.activeElement;
+      const isEditingText = focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement;
+      if (e.code === 'Space' && !isEditingText) { e.preventDefault(); togglePlay(); }
     };
     document.addEventListener('keydown', onKeyDown);
 
@@ -911,11 +892,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       cancelEstimate();
     });
   });
-
-  const startEditDuration = () => {
-    setDraftDuration(String(Math.round(trimmedDuration())));
-    setEditingDuration(true);
-  };
 
   // Close the result and return to the editor. Animation is handled by the
   // createEffect tree — clearing resultUrl flips hasResult to false, which
@@ -1315,18 +1291,12 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
                 frames={frames()}
                 isPlaying={isPlaying()}
                 dragging={dragging()}
-                editingDuration={editingDuration()}
-                draftDuration={draftDuration()}
                 onTogglePlay={togglePlay}
                 onTrimChange={handleTrimChange}
                 onSeek={handleSeek}
                 onHandleDragStart={() => { isDraggingHandle = true; setDragging(true); }}
                 onHandleDragEnd={() => { isDraggingHandle = false; setDragging(false); runEstimate(); }}
-                onStartEditDuration={startEditDuration}
-                onDraftDurationInput={setDraftDuration}
-                onCommitDuration={commitDuration}
-                onCancelEditDuration={() => setEditingDuration(false)}
-                setDurationInputRef={(el) => { durationInputRef = el; }}
+                onDurationChange={(seconds) => setTrimEnd(Math.min(trimStart() + seconds, duration()))}
               />
             </div>
             {/* Result bottom row: [delta chip] [+] [DOWNLOAD ↓]. 3-column

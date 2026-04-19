@@ -1,4 +1,4 @@
-import { Component, Show } from 'solid-js';
+import { Component, Show, createSignal } from 'solid-js';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
 import { PlayPauseIcon, Chip } from '../../shared/ui';
 import Timeline from '../controls/Timeline';
@@ -8,7 +8,10 @@ const SMOOTH_TR = 'left 350ms cubic-bezier(1.0,-0.35,0.22,1.15)';
 const SMOOTH_TR_RIGHT = 'right 350ms cubic-bezier(1.0,-0.35,0.22,1.15)';
 
 // Play/pause + duration chip + Timeline — the row pinned to the bottom of the
-// video overlay. Handles its own shake animation on invalid duration input.
+// video overlay. Owns its duration-edit state locally (TrimRow is the only
+// reader/writer), and shakes on invalid input without surfacing a "bad
+// duration" signal to the parent — callers only see `onDurationChange` fire
+// with a validated value.
 const TrimRow: Component<{
   duration: number;
   trimStart: number;
@@ -17,20 +20,45 @@ const TrimRow: Component<{
   frames: string[];
   isPlaying: boolean;
   dragging: boolean;
-  editingDuration: boolean;
-  draftDuration: string;
   onTogglePlay: () => void;
   onTrimChange: (start: number, end: number) => void;
   onSeek: (t: number) => void;
   onHandleDragStart: () => void;
   onHandleDragEnd: () => void;
-  onStartEditDuration: () => void;
-  onDraftDurationInput: (v: string) => void;
-  onCommitDuration: () => void;
-  onCancelEditDuration: () => void;
-  setDurationInputRef: (el: HTMLInputElement) => void;
+  // Fired with a validated new trimmed-duration in seconds (≥ 1, ≤ remaining).
+  onDurationChange: (seconds: number) => void;
 }> = (p) => {
   const trimmed = () => p.trimEnd - p.trimStart;
+
+  const [editing, setEditing] = createSignal(false);
+  const [draft,   setDraft]   = createSignal('');
+  let inputRef: HTMLInputElement | undefined;
+
+  const shake = () => {
+    if (!inputRef) return;
+    inputRef.style.animation = 'none';
+    void inputRef.offsetWidth;
+    inputRef.style.animation = 'timeline-shake 0.35s ease';
+  };
+
+  const startEdit = () => {
+    setDraft(String(Math.round(trimmed())));
+    setEditing(true);
+  };
+
+  const commit = () => {
+    const parsed = parseFloat(draft().replace(/[^0-9.]/g, ''));
+    const valid = !isNaN(parsed) && parsed >= 1 && parsed <= p.duration - p.trimStart;
+    if (valid) {
+      p.onDurationChange(parsed);
+      setEditing(false);
+    } else {
+      shake();
+      setDraft(String(Math.round(trimmed())));
+    }
+  };
+
+  const cancel = () => setEditing(false);
 
   return (
     <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px', 'align-self': 'stretch', 'pointer-events': 'auto' }}>
@@ -57,27 +85,27 @@ const TrimRow: Component<{
           transition: !p.dragging ? SMOOTH_TR_RIGHT : 'none',
         }}>
           <Show
-            when={p.editingDuration}
+            when={editing()}
             fallback={
-              <div title="Edit duration" onClick={p.onStartEditDuration} style={{ cursor: 'text' }}>
+              <div title="Edit duration" onClick={startEdit} style={{ cursor: 'text' }}>
                 <Chip size="xs">{fmtDuration(trimmed())}</Chip>
               </div>
             }
           >
             <input
-              ref={el => { p.setDurationInputRef(el); setTimeout(() => el.select(), 0); }}
+              ref={el => { inputRef = el; setTimeout(() => el.select(), 0); }}
               type="text"
-              value={p.draftDuration}
-              onInput={e => p.onDraftDurationInput(e.currentTarget.value)}
+              value={draft()}
+              onInput={e => setDraft(e.currentTarget.value)}
               onKeyDown={e => {
-                if (e.key === 'Enter')  { e.preventDefault(); p.onCommitDuration(); }
-                if (e.key === 'Escape') p.onCancelEditDuration();
+                if (e.key === 'Enter')  { e.preventDefault(); commit(); }
+                if (e.key === 'Escape') cancel();
               }}
-              onBlur={p.onCancelEditDuration}
+              onBlur={cancel}
               style={{
                 background: ACCENT, color: BG, border: 'none', outline: 'none',
                 'font-family': MONO, 'font-size': '12px', 'line-height': '16px',
-                width: `${Math.max(p.draftDuration.length, 2) + 1}ch`,
+                width: `${Math.max(draft().length, 2) + 1}ch`,
                 padding: '0', margin: '0', 'caret-color': BG,
               }}
             />
