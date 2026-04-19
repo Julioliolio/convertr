@@ -201,7 +201,7 @@ Because the app is not code-signed, Windows SmartScreen may show a warning on fi
 - **High-quality GIF export** using a 2-pass FFmpeg palette pipeline with selectable dithering algorithms (`sierra2_4a`, `bayer`, `floyd_steinberg`, none)
 - **Video encoding controls**: H.264 / H.265 codec selection, CRF quality slider (0–51), resolution scaling
 - **Real-time progress** streamed via Server-Sent Events (SSE)
-- **Self-cleaning**: temporary files are deleted automatically after download
+- **Self-cleaning**: temporary files are deleted automatically 10 minutes after a conversion finishes, or on error
 - **Two run modes**: standalone web server or packaged Electron desktop app
 
 ---
@@ -210,12 +210,13 @@ Because the app is not code-signed, Windows SmartScreen may show a warning on fi
 
 | Layer | Technology |
 |---|---|
+| Frontend | Solid.js + TypeScript |
+| Bundler / dev server | Vite |
 | Backend | Node.js + Express |
 | Desktop wrapper | Electron |
 | Media processing | FFmpeg + FFprobe |
 | URL downloads | yt-dlp |
 | File uploads | Multer |
-| Frontend | Vanilla HTML / CSS / JavaScript |
 | Build | Electron Builder |
 
 ---
