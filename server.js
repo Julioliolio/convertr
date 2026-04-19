@@ -51,9 +51,9 @@ const sseClients = new Map();
 function broadcast(jobId, data) {
   const clients = sseClients.get(jobId) || [];
   const payload = `data: ${JSON.stringify(data)}\n\n`;
-  clients.forEach(res => res.write(payload));
+  clients.forEach(res => { try { res.write(payload); } catch {} });
   if (data.done || data.error) {
-    clients.forEach(res => res.end());
+    clients.forEach(res => { try { res.end(); } catch {} });
     sseClients.delete(jobId);
   }
 }
@@ -94,8 +94,24 @@ app.post('/fetch', async (req, res) => {
     return res.status(400).json({ error: 'No URL provided' });
   }
 
-  try { new URL(url); } catch {
+  let parsedUrl;
+  try { parsedUrl = new URL(url); } catch {
     return res.status(400).json({ error: 'Invalid URL' });
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    return res.status(400).json({ error: 'Only http(s) URLs are supported' });
+  }
+  // Block loopback / link-local / RFC1918 so yt-dlp can't be pointed at the
+  // user's own intranet. For a desktop converter these ranges are never the
+  // intended target.
+  const host = parsedUrl.hostname;
+  const isPrivate =
+    host === 'localhost' || host === '0.0.0.0' || host === '::1' ||
+    /^127\./.test(host) || /^10\./.test(host) ||
+    /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+    /^169\.254\./.test(host);
+  if (isPrivate) {
+    return res.status(400).json({ error: 'Private/loopback URLs are not allowed' });
   }
 
   const jobId = uuidv4();
@@ -572,7 +588,9 @@ function getJobOutputPath(jobId) {
 
 function startServer(port = PORT) {
   return new Promise((resolve) => {
-    const server = app.listen(port, () => {
+    // Bind loopback only — a desktop converter has no business answering
+    // requests from other devices on the LAN.
+    const server = app.listen(port, '127.0.0.1', () => {
       const actualPort = server.address().port;
       console.log(`\n  Converter running at http://localhost:${actualPort}\n`);
       resolve(actualPort);

@@ -89,8 +89,20 @@ async function createWindow(port) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+
+  // Never let the renderer open a second window or navigate away from the
+  // app shell. Drag-out / download flows go through IPC, not real nav.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    const ok =
+      targetUrl.startsWith('file://') ||
+      targetUrl.startsWith('http://localhost:') ||
+      targetUrl.startsWith('http://127.0.0.1:');
+    if (!ok) event.preventDefault();
   });
 
   const isDev = !app.isPackaged;
@@ -117,7 +129,7 @@ async function createWindow(port) {
 
 // ── Native file drag out of electron window ──
 ipcMain.on('ondragstart', async (event, filePath) => {
-  console.log('[Convertr] ondragstart IPC received, path:', filePath);
+  if (!app.isPackaged) console.log('[Convertr] ondragstart IPC received, path:', filePath);
   if (!filePath || !fs.existsSync(filePath)) {
     console.error('[Convertr] Drag failed: file not found at', filePath);
     return;
@@ -180,4 +192,14 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (viteProcess) viteProcess.kill();
   app.quit();
+});
+
+// Last-resort guards so an unhandled error from the spawned server, an SSE
+// write after client disconnect, or a late-resolving ffprobe doesn't take
+// the whole Electron process down with it.
+process.on('uncaughtException', (err) => {
+  console.error('[Convertr] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[Convertr] unhandledRejection:', reason);
 });

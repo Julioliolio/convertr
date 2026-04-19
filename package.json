@@ -1,7 +1,7 @@
 {
-  "name": "mp4-to-gif",
+  "name": "convertr",
   "version": "1.0.0",
-  "description": "Convert videos from files or URLs to GIF and more",
+  "description": "Convert videos from files or URLs to GIF, MP4, WebM, MOV, AVI, MKV",
   "main": "electron-main.js",
   "scripts": {
     "start": "node server.js",
@@ -15,28 +15,26 @@
     "express": "^4.18.2",
     "multer": "^1.4.5-lts.1",
     "solid-js": "^1.9.12",
-    "uuid": "^9.0.0",
-    "vite": "^8.0.3",
-    "vite-plugin-solid": "^2.11.11"
+    "uuid": "^9.0.0"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
     "electron": "^41.0.2",
     "electron-builder": "^26.8.1",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3",
+    "vite-plugin-solid": "^2.11.11"
   },
   "build": {
-    "appId": "com.mp4togif.converter",
-    "productName": "MP4 to GIF",
+    "appId": "com.convertr.app",
+    "productName": "Convertr",
     "files": [
       "electron-main.js",
       "preload.js",
       "server.js",
       "server-utils.js",
       "server-config.js",
-      "public/**/*",
-      "public-built/**/*",
-      "node_modules/**/*"
+      "public-built/**/*"
     ],
     "mac": {
       "target": "dmg"
