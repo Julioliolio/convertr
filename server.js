@@ -24,6 +24,24 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 app.use(express.static(path.join(__dirname, 'public-built')));
 app.use(express.json());
 
+// Origin whitelist for mutating routes — defense-in-depth over the
+// loopback bind. Blocks a malicious webpage in the user's own browser
+// from firing POSTs (simple cross-origin form/XHR) at this server.
+// Legitimate callers: Electron renderer (Origin: null for file://),
+// Vite dev proxy (http://localhost:<port>), same-origin web mode. A
+// page from evil.com sends Origin: https://evil.com and gets rejected
+// before any ffmpeg / yt-dlp spawn runs.
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  const origin = req.headers.origin;
+  if (!origin || origin === 'null') return next();
+  try {
+    const u = new URL(origin);
+    if (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]') return next();
+  } catch { /* fall through to reject */ }
+  return res.status(403).json({ error: 'Cross-origin request blocked' });
+});
+
 // Validate UUID shape on any :jobId route param — belt-and-braces over the
 // downstream Map lookup, which already rejects unknown ids.
 app.param('jobId', (req, res, next, jobId) => {
