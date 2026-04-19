@@ -6,7 +6,7 @@ import { listenProgress, stopProgress } from '../../api/progress';
 import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
 import { fetchEstimate, cancelEstimate } from '../../api/estimate';
 import { appState, setAppState, type OutputFormat } from '../../state/app';
-import { ACCENT, BG, MONO } from '../../shared/tokens';
+import { ACCENT, BG, MONO, DOT_BG_IMAGE } from '../../shared/tokens';
 import { XSvg, SettingsSvg, Chip, Cross, CornerCrosshair, GuideLine, buttonProps } from '../../shared/ui';
 import LoadingOverlay from '../LoadingOverlay';
 import { fmtBytes, pct, extractFrames, scrambleText, useSmoothedProgress } from '../../shared/utils';
@@ -1068,7 +1068,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
           <div
             style={{
               position: 'absolute', inset: '0',
-              'background-image': 'radial-gradient(circle, rgba(252,0,109,0.5) 1px, transparent 1px)',
+              'background-image': DOT_BG_IMAGE,
               'background-size': '32px 32px',
               'background-position': '50% 50%',
               'pointer-events': 'none',

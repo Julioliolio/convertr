@@ -91,10 +91,6 @@ const Timeline: Component<TimelineProps> = (props) => {
     };
     document.addEventListener('mousemove', seek);
     document.addEventListener('mouseup', onUp);
-    onCleanup(() => {
-      document.removeEventListener('mousemove', seek);
-      document.removeEventListener('mouseup', onUp);
-    });
   };
 
   const dragHandle = (which: 'start' | 'end') => (e: MouseEvent) => {
@@ -122,11 +118,6 @@ const Timeline: Component<TimelineProps> = (props) => {
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-    onCleanup(() => {
-      props.onHandleDragEnd?.();
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    });
   };
 
   // Drag the whole trim window (pan), preserving clip duration
@@ -156,11 +147,6 @@ const Timeline: Component<TimelineProps> = (props) => {
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-    onCleanup(() => {
-      props.onHandleDragEnd?.();
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    });
   };
 
   return (

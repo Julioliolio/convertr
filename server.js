@@ -211,8 +211,10 @@ app.post('/fetch', async (req, res) => {
     // so the downloaded file is always browser-playable. Preview proxy is
     // still safe to skip here — but run it if format drifts later.
     ensurePreviewProxy(jobId, inputPath).then(previewPath => {
+      if (!previewPath) return;
       const j = jobs.get(jobId);
-      if (j && previewPath) j.previewPath = previewPath;
+      if (j) j.previewPath = previewPath;
+      else try { fs.unlinkSync(previewPath); } catch {} // job cleaned up mid-proxy — drop the orphan file
     });
 
     broadcast(jobId, {
@@ -241,8 +243,10 @@ app.post('/upload', upload.single('video'), async (req, res) => {
   // Fire-and-forget proxy generation. The client polls /preview/:jobId and
   // falls back to the raw /input URL if the proxy isn't ready yet.
   ensurePreviewProxy(jobId, inputPath).then(previewPath => {
+    if (!previewPath) return;
     const job = jobs.get(jobId);
-    if (job && previewPath) job.previewPath = previewPath;
+    if (job) job.previewPath = previewPath;
+    else try { fs.unlinkSync(previewPath); } catch {} // job cleaned up mid-proxy — drop the orphan file
   });
   const needsProxy = !isBrowserPlayable(inputExt);
   res.json({ jobId, meta, inputFormat: inputExt, needsProxy });

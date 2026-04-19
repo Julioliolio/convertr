@@ -1,5 +1,5 @@
 import { Component, For } from 'solid-js';
-import { ACCENT, BG, MONO } from '../../shared/tokens';
+import { ACCENT, ACCENT_25, BG, MONO } from '../../shared/tokens';
 import { BAR_HEIGHT, type BarProps } from './common';
 
 // Bricks-only take on option 5: the CARRIER sine-wave row is gone and the
@@ -35,7 +35,7 @@ const CarrierBricks: Component<BarProps> = (p) => {
           <div style={{
             flex: '1',
             background: lit() ? ACCENT : 'transparent',
-            border: `1px solid ${lit() ? ACCENT : 'rgba(252,0,109,0.25)'}`,
+            border: `1px solid ${lit() ? ACCENT : ACCENT_25}`,
             transition: 'background 100ms ease, border-color 100ms ease',
           }} />
         );

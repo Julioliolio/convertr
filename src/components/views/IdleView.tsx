@@ -40,7 +40,7 @@ function computeLoadingPos(vw: number, vh: number) {
   };
 }
 
-import { ACCENT, BG } from '../../shared/tokens';
+import { ACCENT, BG, DOT_BG_IMAGE } from '../../shared/tokens';
 import { Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
 
 type Phase = 'splash' | 'contracting' | 'idle' | 'loading';
@@ -482,7 +482,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
           left: SPLASH.GL, top: SPLASH.GT,
           width: `calc(${SPLASH.GR} - ${SPLASH.GL})`,
           height: `calc(${SPLASH.GB} - ${SPLASH.GT})`,
-          'background-image': 'radial-gradient(circle, rgba(252,0,109,0.5) 1px, transparent 1px)',
+          'background-image': DOT_BG_IMAGE,
           'background-size': '32px 32px',
           'background-position': '50% 50%',
           opacity: '1',
