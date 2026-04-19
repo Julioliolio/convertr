@@ -207,7 +207,7 @@ const Timeline: Component<TimelineProps> = (props) => {
           <For each={props.frames ?? []}>
             {(src) => (
               <img
-                src={src}
+                src={src} alt=""
                 style={{ flex: '1', 'min-width': '0', height: '100%', 'object-fit': 'cover', display: 'block' }}
               />
             )}

@@ -24,6 +24,15 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 app.use(express.static(path.join(__dirname, 'public-built')));
 app.use(express.json());
 
+// Validate UUID shape on any :jobId route param — belt-and-braces over the
+// downstream Map lookup, which already rejects unknown ids.
+app.param('jobId', (req, res, next, jobId) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(jobId)) {
+    return res.status(400).json({ error: 'Invalid job id' });
+  }
+  next();
+});
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, TEMP_DIR),
   filename: (req, file, cb) => {

@@ -1,6 +1,6 @@
 import { Component, For } from 'solid-js';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
-import { FormatButton } from '../../shared/ui';
+import { FormatButton, buttonProps } from '../../shared/ui';
 
 // Box-with-up-arrow glyph for PROCESS. currentColor inherits from text so the
 // icon follows ACCENT; the inner slot stays white to read as a cutout.
@@ -101,7 +101,7 @@ const FormatPicker: Component<{
           'font-family': MONO, 'font-size': '16px', 'line-height': '20px',
           color: ACCENT, 'user-select': 'none', 'white-space': 'nowrap',
         }}
-        onClick={p.onRun}
+        {...buttonProps(p.onRun, 'Process')}
       >
         <div style={{ display: 'flex', 'align-items': 'center' }}>
           <ProcessIcon />
@@ -125,7 +125,7 @@ const FormatPicker: Component<{
         {(fmt) => (
           <div
             style={{ 'font-family': MONO, 'font-size': '16px', 'line-height': '20px', color: ACCENT, cursor: 'pointer', 'user-select': 'none' }}
-            onClick={() => p.onSelect(fmt)}
+            {...buttonProps(() => p.onSelect(fmt), `Select ${fmt}`)}
           >
             {fmt}
           </div>

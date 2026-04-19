@@ -11,7 +11,7 @@ const SettingsColumn: Component<{
 }> = (p) => (
   <div
     ref={p.ref}
-    style={{ position: 'absolute', overflow: 'hidden', '-webkit-app-region': 'no-drag' } as any}
+    style={{ position: 'absolute', overflow: 'hidden', '-webkit-app-region': 'no-drag' }}
   >
     <VideoSettings videoEl={p.videoEl} open={p.open} isPortrait={p.isPortrait} />
   </div>

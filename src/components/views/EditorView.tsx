@@ -5,9 +5,9 @@ import { startConversion } from '../../api/convert';
 import { listenProgress, stopProgress } from '../../api/progress';
 import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
 import { fetchEstimate, cancelEstimate } from '../../api/estimate';
-import { appState, setAppState } from '../../state/app';
+import { appState, setAppState, type OutputFormat } from '../../state/app';
 import { ACCENT, BG, MONO } from '../../shared/tokens';
-import { XSvg, SettingsSvg, Chip, Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
+import { XSvg, SettingsSvg, Chip, Cross, CornerCrosshair, GuideLine, buttonProps } from '../../shared/ui';
 import LoadingOverlay from '../LoadingOverlay';
 import { fmtBytes, pct, extractFrames, scrambleText, useSmoothedProgress } from '../../shared/utils';
 import FormatPicker    from '../editor/FormatPicker';
@@ -438,8 +438,10 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   const [vp,            setVp]            = createSignal({ vw: 0, vh: 0 });
   const [fmtOpen,         setFmtOpen]         = createSignal(false);
   const [settingsOpen,    setSettingsOpen]    = createSignal(false);
-  const [format,          setFormat]          = createSignal(FORMATS[0]);
-  const [displayFormat,   setDisplayFormat]   = createSignal(FORMATS[0]);
+  // `format` is derived from the store; `displayFormat` is the scramble
+  // animation target — separate so mid-animation noise doesn't leak into state.
+  const format = () => appState.outputFormat.toUpperCase();
+  const [displayFormat, setDisplayFormat] = createSignal(format());
 
   // ── Format scramble animation ─────────────────────────────────────────────────
   let formatScrambleRaf = 0;
@@ -450,11 +452,6 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       { frames: 14, frameMs: 35 },
     );
   };
-
-  // Keep appState.outputFormat in sync with local format picker
-  createEffect(() => {
-    setAppState('outputFormat', format().toLowerCase() as any);
-  });
 
   // ── DOM setters ───────────────────────────────────────────────────────────────
   const applyBox = (b: BoxResult) => {
@@ -838,10 +835,8 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     const srcExt = (srcName.split('.').pop() || '').toLowerCase();
     const SAMEFORMAT_OUTPUTS = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'gif'];
     const pickedFormat = SAMEFORMAT_OUTPUTS.includes(srcExt) ? srcExt : 'mp4';
-    setAppState('outputFormat', pickedFormat as any);
-    const fmtUpper = pickedFormat.toUpperCase();
-    setFormat(fmtUpper);
-    setDisplayFormat(fmtUpper);
+    setAppState('outputFormat', pickedFormat as OutputFormat);
+    setDisplayFormat(pickedFormat.toUpperCase());
 
     // ── Upload to server ───────────────────────────────────────────────────
     // IdleView now handles both file upload (XHR + progress bar) and URL
@@ -965,7 +960,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     resultScrambleRaf = scrambleText(
       [{ target: num, setter: setDisplayResultSize }],
       resultScrambleRaf,
-      { frames: 18, frameMs: 30, chars: SCRAMBLE_CHARS },
+      { frames: 18, frameMs: 30, chars: '0123456789!@#%&' },
     );
   });
   onCleanup(() => cancelAnimationFrame(resultScrambleRaf));
@@ -1012,7 +1007,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   };
 
   return (
-    <div ref={containerRef} style={{ position: 'fixed', top: '0', left: '0', right: '0', bottom: '0', background: BG, overflow: 'hidden', '-webkit-app-region': 'drag' } as any}>
+    <div ref={containerRef} style={{ position: 'fixed', top: '0', left: '0', right: '0', bottom: '0', background: BG, overflow: 'hidden', '-webkit-app-region': 'drag' }}>
       <style>{`
         @keyframes timeline-shake {
           0%   { transform: translateX(0); }
@@ -1063,7 +1058,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       `}</style>
 
       {/* ── Bounding box (video + overlay) ─────────────────────────────────── */}
-      <div ref={bboxEl} style={{ position: 'absolute', overflow: 'hidden', '-webkit-app-region': 'no-drag' } as any}>
+      <div ref={bboxEl} style={{ position: 'absolute', overflow: 'hidden', '-webkit-app-region': 'no-drag' }}>
         {/* Dotted background — rendered FIRST so it sits behind the input
             video wrapper. In fast-cut result the video morphs into an
             inset frame and the dotted bg peeks through the surrounding
@@ -1078,7 +1073,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               'background-position': '50% 50%',
               'pointer-events': 'none',
               animation: 'result-fade-in 0.3s ease both',
-            } as any}
+            }}
           />
         </Show>
 
@@ -1130,7 +1125,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
           <div style={{
             position: 'absolute', inset: '0',
             animation: `result-fade-in 0.2s ease ${anim.timing.p1_dur + anim.timing.p2_delay + anim.timing.p2_dur}s both`,
-          } as any}>
+          }}>
             <CarrierBricks progress={smoothedProgress()} height={CONVERTING_BAR_H_PX} />
           </div>
         </Show>
@@ -1147,7 +1142,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               display: 'flex', 'align-items': 'center', 'justify-content': 'center',
               'pointer-events': 'none',
               animation: 'result-fade-in 0.3s ease both',
-            } as any}
+            }}
           >
             <Show
               when={appState.outputFormat === 'gif'}
@@ -1267,10 +1262,18 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
                 when={hasResult()}
                 fallback={
                   <>
-                    <div title="Settings" style={{ cursor: 'pointer', 'pointer-events': 'auto' }} onClick={() => setSettingsOpen(o => !o)}>
+                    <div
+                      title="Settings"
+                      style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
+                      {...buttonProps(() => setSettingsOpen(o => !o), 'Settings')}
+                    >
                       <SettingsSvg width={20} height={22} open={settingsOpen()} />
                     </div>
-                    <div title="Cancel" style={{ cursor: 'pointer', 'pointer-events': 'auto' }} onClick={triggerExit}>
+                    <div
+                      title="Cancel"
+                      style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
+                      {...buttonProps(triggerExit, 'Cancel')}
+                    >
                       <XSvg width={20} height={22} />
                     </div>
                   </>
@@ -1278,7 +1281,11 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               >
                 {/* Result state: X alone in top-right. DOWNLOAD chip moved to
                     the bottom-right of the overlay (mirrors Paper design). */}
-                <div title="Close result" style={{ cursor: 'pointer', 'pointer-events': 'auto' }} onClick={closeResult}>
+                <div
+                  title="Close result"
+                  style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
+                  {...buttonProps(closeResult, 'Close result')}
+                >
                   <XSvg width={20} height={22} />
                 </div>
               </Show>
@@ -1377,14 +1384,18 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       </div>
 
       {/* ── Top bar: format dropdown + PROCESS. Height animated by effects. ── */}
-      <div ref={topBarEl} style={{ position: 'absolute', 'box-sizing': 'border-box', overflow: 'hidden', '-webkit-app-region': 'no-drag' } as any}>
+      <div ref={topBarEl} style={{ position: 'absolute', 'box-sizing': 'border-box', overflow: 'hidden', '-webkit-app-region': 'no-drag' }}>
         <FormatPicker
           formats={FORMATS}
           format={format()}
           displayFormat={displayFormat()}
           open={fmtOpen()}
           onToggleOpen={() => setFmtOpen(o => !o)}
-          onSelect={(fmt) => { setFormat(fmt); scrambleFormat(fmt); setFmtOpen(false); }}
+          onSelect={(fmt) => {
+            setAppState('outputFormat', fmt.toLowerCase() as OutputFormat);
+            scrambleFormat(fmt);
+            setFmtOpen(false);
+          }}
           onRun={handleRun}
         />
       </div>

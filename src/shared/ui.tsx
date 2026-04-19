@@ -160,7 +160,22 @@ export const SettingsSvg: Component<{ open?: boolean; width?: number; height?: n
   );
 };
 
-// ── Chip: pink bg, cream text, IBM Plex Mono ─────────────────────────────────
+// ── a11y helper: turn a div into a keyboard-reachable button ─────────────────
+// Spread the result into the element; pairs an aria label with Enter/Space
+// activation so icon-only controls aren't dead to screen readers / keyboard.
+
+export const buttonProps = (onClick: () => void, label: string) => ({
+  role: 'button' as const,
+  tabindex: 0,
+  'aria-label': label,
+  onClick,
+  onKeyDown: (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onClick();
+    }
+  },
+});
 
 // ── FormatButton: morphs chevron → minus when open ──────────────────────────
 
