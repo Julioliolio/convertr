@@ -282,6 +282,23 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   const [fetchStatus, setFetchStatus] = createSignal<string | null>(null);
   let fileInputRef!: HTMLInputElement;
 
+  // Seed fps + width sliders from the source video's own metadata so opening
+  // the settings panel shows the originals by default. Clamped to slider
+  // ranges (fps 1..60, width 240..1920) — see VideoSettings.tsx tick defs.
+  // Both `width` (GIF) and `vidWidth` (non-GIF) get the same value, so the
+  // originals are pre-populated regardless of which output format the user
+  // picks.
+  const seedSourceDefaults = (metaFps?: number, metaWidth?: number) => {
+    if (metaFps && metaFps > 0) {
+      setAppState('fps', Math.max(1, Math.min(60, Math.round(metaFps))));
+    }
+    if (metaWidth && metaWidth > 0) {
+      const w = Math.max(240, Math.min(1920, Math.round(metaWidth)));
+      setAppState('width', w);
+      setAppState('vidWidth', w);
+    }
+  };
+
   const handleFile = (file: File) => {
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     const isGif = file.type === 'image/gif' || ext === 'gif';
@@ -356,6 +373,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         }
         const w = result.meta?.width  || dims.w;
         const h = result.meta?.height || dims.h;
+        seedSourceDefaults(result.meta?.fps, w);
         props.onVideoSelected({
           file, name: file.name, sizeBytes: file.size,
           width: w, height: h, objectUrl,
@@ -431,6 +449,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
               setAppState('uploadReady', true);
               setAppState('inputFormat', data.inputFormat ?? 'mp4');
               setAppState('needsProxy', !!data.needsProxy);
+              seedSourceDefaults(meta.fps, meta.width);
               props.onVideoSelected({
                 url: text,
                 name: data.fileName ?? text.split('/').pop() ?? 'video',
