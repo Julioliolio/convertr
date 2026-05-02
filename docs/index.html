@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Convertr</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --accent: #FC006D;
+      --bg: #F8F7F6;
+      --mono: 'IBM Plex Mono', system-ui, monospace;
+    }
+
+    body {
+      font-family: var(--mono);
+      background: var(--bg);
+      color: var(--accent);
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      background-image: radial-gradient(circle, rgba(252,0,109,0.2) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--accent);
+      padding: 48px 56px;
+      max-width: 480px;
+      width: calc(100% - 48px);
+    }
+
+    h1 {
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .tagline {
+      font-size: 11px;
+      opacity: 0.6;
+      margin-bottom: 40px;
+    }
+
+    .buttons { display: flex; flex-direction: column; gap: 10px; }
+
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border: 1px solid var(--accent);
+      background: transparent;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .btn:hover, .btn.active {
+      background: var(--accent);
+      color: var(--bg);
+    }
+
+    .btn .platform { display: flex; align-items: center; gap: 10px; }
+    .btn .ext { font-size: 10px; opacity: 0.6; }
+    .btn:hover .ext, .btn.active .ext { opacity: 0.8; }
+
+    .version {
+      font-size: 10px;
+      opacity: 0.4;
+      margin-top: 28px;
+      text-align: right;
+    }
+
+    .loading { font-size: 11px; opacity: 0.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Convertr</h1>
+    <p class="tagline">Convert videos to GIF, MP4, WebM and more</p>
+    <div class="buttons" id="buttons">
+      <span class="loading">fetching latest release...</span>
+    </div>
+    <p class="version" id="version"></p>
+  </div>
+
+  <script>
+    const PLATFORMS = [
+      { key: 'mac',     label: 'macOS',   ext: '.dmg',      ua: ['mac', 'iphone', 'ipad'] },
+      { key: 'windows', label: 'Windows', ext: '.exe',      ua: ['win'] },
+      { key: 'linux',   label: 'Linux',   ext: '.AppImage', ua: ['linux', 'x11'] },
+    ];
+
+    function detectPlatform() {
+      const ua = navigator.userAgent.toLowerCase();
+      for (const p of PLATFORMS) {
+        if (p.ua.some(k => ua.includes(k))) return p.key;
+      }
+      return null;
+    }
+
+    async function load() {
+      const res = await fetch('https://api.github.com/repos/Julioliolio/convertr/releases/latest');
+      const release = await res.json();
+      const version = release.tag_name;
+      const assets = release.assets;
+
+      const detected = detectPlatform();
+      const container = document.getElementById('buttons');
+      container.innerHTML = '';
+
+      for (const p of PLATFORMS) {
+        const asset = assets.find(a => a.name.includes(`-${p.key}`) && a.name.endsWith(p.ext));
+        if (!asset) continue;
+
+        const a = document.createElement('a');
+        a.className = 'btn' + (p.key === detected ? ' active' : '');
+        a.href = asset.browser_download_url;
+        a.innerHTML = `
+          <span class="platform">${p.label}</span>
+          <span class="ext">${p.ext}</span>
+        `;
+        container.appendChild(a);
+      }
+
+      document.getElementById('version').textContent = version;
+    }
+
+    load().catch(() => {
+      document.getElementById('buttons').innerHTML =
+        '<span class="loading">could not load release — try <a href="https://github.com/Julioliolio/convertr/releases/latest" style="color:inherit">GitHub releases</a></span>';
+    });
+  </script>
+</body>
+</html>
