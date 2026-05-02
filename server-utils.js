@@ -181,6 +181,7 @@ function serveJobFile(jobs, req, res, pathKey, asDownload = false) {
 }
 
 module.exports = {
+  FFMPEG_PATH,
   getDuration,
   getVideoMeta,
   buildGifFilters,

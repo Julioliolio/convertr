@@ -12,6 +12,7 @@ const {
 } = require('./server-config');
 
 const {
+  FFMPEG_PATH,
   getDuration, getVideoMeta, buildGifFilters, runFFmpeg,
   getCodecArgs, getFastCutArgs, buildProxyArgs, isBrowserPlayable,
   serveJobFile,
@@ -80,10 +81,21 @@ function broadcast(jobId, data) {
   const payload = `data: ${JSON.stringify(data)}\n\n`;
   clients.forEach(res => { try { res.write(payload); } catch {} });
   if (data.done || data.error) {
+    // Persist terminal state so late-connecting SSE clients can be caught up.
+    const job = jobs.get(jobId);
+    if (job && data.error) { job.status = 'error'; job.errorMessage = data.message; }
     clients.forEach(res => { try { res.end(); } catch {} });
     sseClients.delete(jobId);
   }
 }
+
+// Augmented PATH so yt-dlp is found inside a packaged Electron app even when
+// the system PATH doesn't include Homebrew (/opt/homebrew/bin on Apple Silicon,
+// /usr/local/bin on Intel).
+const YTDLP_ENV = {
+  ...process.env,
+  PATH: ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.PATH || ''].join(':'),
+};
 
 function cleanup(jobId, delay = 0) {
   return setTimeout(() => {
@@ -161,7 +173,7 @@ app.post('/fetch', async (req, res) => {
       '--no-playlist', '--max-filesize', '500m',
       '-f', 'bv*+ba/b', '--merge-output-format', 'mp4',
       '-o', outputTemplate, '--progress', '--newline', url,
-    ]);
+    ], { env: YTDLP_ENV });
   } catch (err) {
     broadcast(jobId, { error: true, message: ytdlpMissingHint });
     cleanup(jobId, ERROR_CLEANUP_MS);
@@ -314,7 +326,7 @@ app.post('/estimate', async (req, res) => {
   const cleanupAll = (paths) => paths.forEach(f => { try { fs.unlinkSync(f); } catch {} });
 
   const runEstFFmpegTo = (args, outPath) => new Promise((resolve, reject) => {
-    const ff = spawn('ffmpeg', ['-y', ...args]);
+    const ff = spawn(FFMPEG_PATH, ['-y', ...args]);
     job.estimateProcess = ff;
     let stderr = '';
     ff.stderr.on('data', c => { stderr = (stderr + c.toString()).slice(-1024); });
@@ -570,6 +582,18 @@ app.get('/progress/:jobId', (req, res) => {
   const job = jobs.get(jobId);
   if (job?.status === 'done') {
     res.write(`data: ${JSON.stringify({ done: true, progress: 100, message: 'Done!', downloadUrl: `/download/${jobId}`, inputSize: job.inputSize, outputSize: job.outputSize, outputFormat: job.outputFormat })}\n\n`);
+    res.end();
+    return;
+  }
+  // Race guard: download finished before SSE client connected — replay now.
+  if (job?.status === 'downloaded') {
+    res.write(`data: ${JSON.stringify({ status: 'downloaded', progress: 30, message: 'Download complete. Ready to convert.', inputPath: job.inputPath, inputSize: job.inputSize, fileName: job.inputPath ? path.basename(job.inputPath) : '', meta: job.meta, inputFormat: job.inputFormat, needsProxy: !isBrowserPlayable(job.inputFormat) })}\n\n`);
+    res.end();
+    return;
+  }
+  // Race guard: error fired before SSE client connected — replay now.
+  if (job?.status === 'error') {
+    res.write(`data: ${JSON.stringify({ error: true, message: job.errorMessage || 'Unknown error' })}\n\n`);
     res.end();
     return;
   }
