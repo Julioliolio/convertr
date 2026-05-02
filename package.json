@@ -62,6 +62,7 @@
       "icon": "static/icon.png"
     },
     "linux": {
+      "artifactName": "${productName}-${version}-linux.${ext}",
       "target": "AppImage",
       "icon": "static/icon.png"
     }
