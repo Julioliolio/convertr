@@ -15,6 +15,7 @@ const SPLASH = { GL: '2.8%',  GR: '97.2%', GT: '6.13%', GB: '92.4%'  };
 function computeIdlePos(vw: number, vh: number) {
   const { x1, y1, x2, y2 } = calculateBBoxTargets(vw, vh, null, 'idle');
   return {
+    x1, y1, x2, y2,
     gl: pct(x1, vw), gr: pct(x2, vw),
     gt: pct(y1, vh), gb: pct(y2, vh),
     // Anchor text 16px above the bottom guide so it always sits inside the bbox.
@@ -34,6 +35,7 @@ function computeLoadingPos(vw: number, vh: number) {
   const x2 = x1 + barW;
   const y2 = y1 + barH;
   return {
+    x1, y1, x2, y2,
     gl: pct(x1, vw), gr: pct(x2, vw),
     gt: pct(y1, vh), gb: pct(y2, vh),
     helperBottom: (vh - y2 + 16) + 'px',
@@ -207,7 +209,13 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     onCleanup(() => { clearTimeout(t1); clearTimeout(t2); });
 
     // Track viewport size so idle bbox stays responsive on resize
-    setVp({ vw: rootEl.offsetWidth, vh: rootEl.offsetHeight });
+    const vw0 = rootEl.offsetWidth, vh0 = rootEl.offsetHeight;
+    setVp({ vw: vw0, vh: vh0 });
+    // Initialize guide lines at SPLASH pixel positions before first animation
+    vLineL.style.transform = `translateX(${vw0 * 0.028}px)`;
+    vLineR.style.transform = `translateX(${vw0 * 0.972}px)`;
+    hLineT.style.transform = `translateY(${vh0 * 0.0613}px)`;
+    hLineB.style.transform = `translateY(${vh0 * 0.924}px)`;
     const ro = new ResizeObserver(() => {
       setVp({ vw: rootEl.offsetWidth, vh: rootEl.offsetHeight });
     });
@@ -255,15 +263,32 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     if (skipTransition) skipTransition = false;
     const trLeft = skip ? `0s ${guideEase}` : `${STAGGER_P1}s ${guideEase}`;
     const trTop  = skip ? `0s ${guideEase}` : `${STAGGER_P2}s ${guideEase} ${STAGGER_DELAY}s`;
-    vLineL.style.transition = `left ${trLeft}`;
-    vLineR.style.transition = `left ${trLeft}`;
-    hLineT.style.transition = `top ${trTop}`;
-    hLineB.style.transition = `top ${trTop}`;
+
+    // Resolve pixel positions for compositor-only line transforms
+    const { vw, vh } = vp();
+    let lPx: number, rPx: number, tPx: number, bPx: number;
+    const ph = phase();
+    if (ph === 'splash') {
+      lPx = vw * 0.028; rPx = vw * 0.972; tPx = vh * 0.0613; bPx = vh * 0.924;
+    } else if (ph === 'loading') {
+      const pos = loadingPos();
+      lPx = pos.x1; rPx = pos.x2; tPx = pos.y1; bPx = pos.y2;
+    } else {
+      const pos = idlePos();
+      lPx = pos.x1; rPx = pos.x2; tPx = pos.y1; bPx = pos.y2;
+    }
+
+    vLineL.style.transition = `transform ${trLeft}`;
+    vLineR.style.transition = `transform ${trLeft}`;
+    hLineT.style.transition = `transform ${trTop}`;
+    hLineB.style.transition = `transform ${trTop}`;
     [crossTL, crossTR, crossBL, crossBR].forEach(el => {
       el.style.transition = `top ${trTop}, left ${trLeft}`;
     });
-    vLineL.style.left = l;   vLineR.style.left = r;
-    hLineT.style.top  = t;   hLineB.style.top  = b;
+    vLineL.style.transform = `translateX(${lPx}px)`;
+    vLineR.style.transform = `translateX(${rPx}px)`;
+    hLineT.style.transform = `translateY(${tPx}px)`;
+    hLineB.style.transform = `translateY(${bPx}px)`;
     crossTL.style.top  = `calc(${t} - 10px)`;  crossTL.style.left = `calc(${l} - 10px)`;
     crossTR.style.top  = `calc(${t} - 10px)`;  crossTR.style.left = `calc(${r} - 10px)`;
     crossBL.style.top  = `calc(${b} - 10px)`;  crossBL.style.left = `calc(${l} - 10px)`;
@@ -510,10 +535,10 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       />
 
       {/* ── Guide lines ───────────────────────────────────────────────────── */}
-      <GuideLine orientation="v" ref={el => { vLineL = el; el.style.left = SPLASH.GL; }} />
-      <GuideLine orientation="v" ref={el => { vLineR = el; el.style.left = SPLASH.GR; }} />
-      <GuideLine orientation="h" ref={el => { hLineT = el; el.style.top  = SPLASH.GT; }} />
-      <GuideLine orientation="h" ref={el => { hLineB = el; el.style.top  = SPLASH.GB; }} />
+      <GuideLine orientation="v" ref={el => { vLineL = el; }} />
+      <GuideLine orientation="v" ref={el => { vLineR = el; }} />
+      <GuideLine orientation="h" ref={el => { hLineT = el; }} />
+      <GuideLine orientation="h" ref={el => { hLineB = el; }} />
 
       {/* ── Corner crosshairs ─────────────────────────────────────────────── */}
       <CornerCrosshair ref={el => crossTL = el} />

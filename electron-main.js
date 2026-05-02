@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const { autoUpdater } = require('electron-updater');
 
+// GPU rasterization must be set before app is ready
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+
 let mainWindow;
 let viteProcess;
 let serverPort;

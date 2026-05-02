@@ -434,8 +434,10 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   // ── DOM setters ───────────────────────────────────────────────────────────────
   const applyBox = (b: BoxResult) => {
     const { gl, gr, gt, gb } = b;
-    vLineL.style.left = gl; vLineR.style.left = gr;
-    hLineT.style.top  = gt; hLineB.style.top  = gb;
+    vLineL.style.transform = `translateX(${b.left}px)`;
+    vLineR.style.transform = `translateX(${b.right}px)`;
+    hLineT.style.transform = `translateY(${b.top}px)`;
+    hLineB.style.transform = `translateY(${b.bottom}px)`;
     crossTL.style.top = `calc(${gt} - 10px)`; crossTL.style.left = `calc(${gl} - 10px)`;
     crossTR.style.top = `calc(${gt} - 10px)`; crossTR.style.left = `calc(${gr} - 10px)`;
     crossBL.style.top = `calc(${gb} - 10px)`; crossBL.style.left = `calc(${gl} - 10px)`;
@@ -473,8 +475,8 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     if (dropdownDur != null) {
       const Dd = `${dropdownDur}s ${ease}`;
       return {
-        vLines:  `left ${Dd}`,
-        hLines:  `top ${Dd}`,
+        vLines:  `transform ${Dd}`,
+        hLines:  `transform ${Dd}`,
         crosses: `top ${Dd}, left ${Dd}`,
         bbox:    `top ${Dd}, height ${Dd}, left ${Dd}, width ${Dd}`,
         topBar:  `top ${Dd}, height ${Dd}, left ${Dd}, width ${Dd}`,
@@ -484,8 +486,8 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     const Pv = landscape ? `${p2_dur}s ${ease} ${p2_delay}s` : `${p1_dur}s ${ease}`;
     const Ph = landscape ? `${p1_dur}s ${ease}`               : `${p2_dur}s ${ease} ${p2_delay}s`;
     return {
-      vLines:  `left ${Ph}`,
-      hLines:  `top ${Pv}`,
+      vLines:  `transform ${Ph}`,
+      hLines:  `transform ${Pv}`,
       crosses: `top ${Pv}, left ${Ph}`,
       bbox:    `top ${Pv}, height ${Pv}, left ${Ph}, width ${Ph}`,
       topBar:  `top ${Pv}, height ${Pv}, left ${Ph}, width ${Ph}`,

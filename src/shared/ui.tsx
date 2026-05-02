@@ -316,8 +316,8 @@ export const GuideLine: Component<{
   <div
     ref={p.ref}
     style={p.orientation === 'v'
-      ? { position: 'absolute', top: '0', bottom: '0', width: '1px', background: ACCENT_75, 'pointer-events': 'none' }
-      : { position: 'absolute', left: '0', right: '0', height: '1px', background: ACCENT_75, 'pointer-events': 'none' }
+      ? { position: 'absolute', top: '0', bottom: '0', width: '1px', background: ACCENT_75, 'pointer-events': 'none', 'will-change': 'transform' }
+      : { position: 'absolute', left: '0', right: '0', height: '1px', background: ACCENT_75, 'pointer-events': 'none', 'will-change': 'transform' }
     }
   />
 );
