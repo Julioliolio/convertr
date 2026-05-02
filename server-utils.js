@@ -1,11 +1,19 @@
 const { spawn } = require('child_process');
 const { STDERR_BUFFER } = require('./server-config');
 
+// When bundled inside an Electron asar archive, executables must be loaded
+// from the unpacked sibling directory — they can't be run from inside a zip.
+function _unpack(p) {
+  return p.replace(/app\.asar([/\\])/, 'app.asar.unpacked$1');
+}
+const FFMPEG_PATH  = _unpack(require('ffmpeg-static'));
+const FFPROBE_PATH = _unpack(require('@ffprobe-installer/ffprobe').path);
+
 // ── FFprobe helpers ──────────────────────────────────────────────────────────
 
 function getDuration(inputPath) {
   return new Promise((resolve) => {
-    const ff = spawn('ffprobe', [
+    const ff = spawn(FFPROBE_PATH, [
       '-v', 'error',
       '-show_entries', 'format=duration',
       '-of', 'default=noprint_wrappers=1:nokey=1',
@@ -20,7 +28,7 @@ function getDuration(inputPath) {
 
 function getVideoMeta(inputPath) {
   return new Promise((resolve) => {
-    const ff = spawn('ffprobe', [
+    const ff = spawn(FFPROBE_PATH, [
       '-v', 'error',
       '-select_streams', 'v:0',
       '-show_entries', 'stream=width,height,r_frame_rate,bit_rate',
@@ -66,7 +74,7 @@ function buildGifFilters(opts) {
 
 function runFFmpeg(args, onProgress) {
   return new Promise((resolve, reject) => {
-    const ff = spawn('ffmpeg', ['-y', ...args]);
+    const ff = spawn(FFMPEG_PATH, ['-y', ...args]);
     let stderr = '';
     ff.stderr.on('data', chunk => {
       const text = chunk.toString();

@@ -1,7 +1,8 @@
-const { app, BrowserWindow, ipcMain, nativeImage } = require('electron/main');
+const { app, BrowserWindow, ipcMain, nativeImage, dialog } = require('electron/main');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
+const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
 let viteProcess;
@@ -118,7 +119,7 @@ async function createWindow(port) {
       mainWindow.loadFile(path.join(__dirname, 'public-built', 'index.html'));
     }
   } else {
-    mainWindow.loadFile(path.join(__dirname, 'public-built', 'index.html'));
+    mainWindow.loadURL(`http://localhost:${port}/`);
   }
 
   mainWindow.on('closed', () => {
@@ -176,12 +177,31 @@ ipcMain.handle('get-output-path', async (_event, jobId) => {
   }
 });
 
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+
+  autoUpdater.checkForUpdates();
+
+  autoUpdater.on('update-downloaded', () => {
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'Update ready',
+      message: 'A new version of Convertr has been downloaded. Restart to apply the update.',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+    }).then(({ response }) => {
+      if (response === 0) autoUpdater.quitAndInstall();
+    });
+  });
+}
+
 app.whenReady().then(() => {
   const { startServer } = require('./server');
 
   startServer(0).then((port) => {
     serverPort = port;
     createWindow(port);
+    setupAutoUpdater();
   });
 
   app.on('activate', () => {
