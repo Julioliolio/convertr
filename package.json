@@ -51,11 +51,13 @@
       "releaseType": "release"
     },
     "mac": {
+      "artifactName": "${productName}-${version}-mac.${ext}",
       "target": "dmg",
       "icon": "static/icon.png",
       "category": "public.app-category.video"
     },
     "win": {
+      "artifactName": "${productName}-${version}-windows.${ext}",
       "target": "nsis",
       "icon": "static/icon.png"
     },
