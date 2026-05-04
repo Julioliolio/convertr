@@ -83,16 +83,68 @@ export const PlayPauseIcon: Component<{ playing: boolean; width?: number; height
 
 // ── X button, 20 × 22 ────────────────────────────────────────────────────────
 
-export const XSvg: Component<{ width?: number; height?: number }> = (p) => (
+// X hover spin — single 360° clockwise rotation with a back.out spring so it
+// overshoots slightly past identity at the end (the "bounce") and settles.
+// Fired via WAAPI on mouseenter so the rotation is fire-and-forget — the
+// element doesn't need to track hover state and can't reverse mid-spin.
+const X_SPIN_KEYFRAMES: Keyframe[] = [
+  { transform: 'rotate(0deg)' },
+  { transform: 'rotate(360deg)' },
+];
+const X_SPIN_OPTS: KeyframeAnimationOptions = {
+  duration: 200,
+  easing: 'cubic-bezier(0.34, 1.2, 0.64, 1)',
+};
+
+export const XSvg: Component<{ width?: number; height?: number }> = (p) => {
+  let groupRef!: SVGGElement;
+  let lastSpinAt = 0;
+
+  const triggerSpin = () => {
+    if (!groupRef) return;
+    const now = performance.now();
+    // Cooldown matches spin duration so a quick re-hover doesn't restart mid-rotation.
+    if (now - lastSpinAt < 500) return;
+    lastSpinAt = now;
+    groupRef.animate(X_SPIN_KEYFRAMES, X_SPIN_OPTS);
+  };
+
+  return (
+    <svg
+      onMouseEnter={triggerSpin}
+      width={p.width ?? 20} height={p.height ?? 22}
+      viewBox="0 0 79 88" fill="none" xmlns="http://www.w3.org/2000/svg"
+      preserveAspectRatio="none"
+      style={{ width: `${p.width ?? 20}px`, height: `${p.height ?? 22}px`, 'flex-shrink': '0' }}
+    >
+      <rect width="78.198" height="87.165" fill={ACCENT} />
+      <g ref={groupRef!} class="x-cross">
+        <rect width="55" height="6" transform="matrix(0.643 -0.766 -0.766 -0.643 23.721 66.577)" fill="#FFFFFF" />
+        <rect width="55" height="6" transform="matrix(-0.643 -0.766 -0.766 0.643 59.074 62.721)" fill="#FFFFFF" />
+      </g>
+    </svg>
+  );
+};
+
+// ── Back-arrow button, 20 × 22 — matches XSvg style ─────────────────────────
+// Pink ACCENT square with a white left-pointing arrow inside. Stroke weight
+// matches the X (6 viewBox units) so the two icons read as a pair. The
+// arrowhead is a single V polyline joined to a horizontal shaft — the V's
+// miter at the tip swallows the shaft cap, giving a clean point.
+export const BackArrowSvg: Component<{ width?: number; height?: number }> = (p) => (
   <svg
+    class="back-arrow-icon"
     width={p.width ?? 20} height={p.height ?? 22}
     viewBox="0 0 79 88" fill="none" xmlns="http://www.w3.org/2000/svg"
     preserveAspectRatio="none"
     style={{ width: `${p.width ?? 20}px`, height: `${p.height ?? 22}px`, 'flex-shrink': '0' }}
   >
     <rect width="78.198" height="87.165" fill={ACCENT} />
-    <rect width="55" height="6" transform="matrix(0.643 -0.766 -0.766 -0.643 23.721 66.577)" fill="#FFFFFF" />
-    <rect width="55" height="6" transform="matrix(-0.643 -0.766 -0.766 0.643 59.074 62.721)" fill="#FFFFFF" />
+    <path
+      d="M35 23.6 L15 43.6 L35 63.6 M15 43.6 L63 43.6"
+      stroke="#FFFFFF" stroke-width="6" fill="none"
+      stroke-linecap="square" stroke-linejoin="miter"
+    />
   </svg>
 );
 

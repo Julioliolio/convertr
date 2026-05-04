@@ -7,7 +7,7 @@ import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
 import { fetchEstimate, cancelEstimate } from '../../api/estimate';
 import { appState, setAppState, type OutputFormat } from '../../state/app';
 import { ACCENT, BG, MONO, DOT_BG_IMAGE } from '../../shared/tokens';
-import { XSvg, SettingsSvg, Chip, Cross, CornerCrosshair, GuideLine, buttonProps } from '../../shared/ui';
+import { XSvg, BackArrowSvg, SettingsSvg, Chip, Cross, CornerCrosshair, GuideLine, buttonProps } from '../../shared/ui';
 import LoadingOverlay from '../LoadingOverlay';
 import { fmtBytes, pct, extractFrames, scrambleText, useSmoothedProgress } from '../../shared/utils';
 import FormatPicker    from '../editor/FormatPicker';
@@ -1257,15 +1257,29 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
                   </>
                 }
               >
-                {/* Result state: X alone in top-right. DOWNLOAD chip moved to
+                {/* Result state: [back-arrow] [X] in top-right. The back arrow
+                    returns to the editor with the video still loaded (so the
+                    user can tweak settings); the X discards everything and
+                    returns to the idle/upload screen. DOWNLOAD chip moved to
                     the bottom-right of the overlay (mirrors Paper design). */}
-                <div
-                  title="Close result"
-                  style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
-                  {...buttonProps(closeResult, 'Close result')}
-                >
-                  <XSvg width={20} height={22} />
-                </div>
+                <>
+                  <div
+                    class="icon-button"
+                    title="Back to settings"
+                    style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
+                    {...buttonProps(closeResult, 'Back to settings')}
+                  >
+                    <BackArrowSvg width={20} height={22} />
+                  </div>
+                  <div
+                    class="icon-button"
+                    title="Start over"
+                    style={{ cursor: 'pointer', 'pointer-events': 'auto' }}
+                    {...buttonProps(triggerExit, 'Start over')}
+                  >
+                    <XSvg width={20} height={22} />
+                  </div>
+                </>
               </Show>
             </div>
           </div>

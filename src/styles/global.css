@@ -21,3 +21,36 @@
   transform-box: view-box;
   transform-origin: 39.1px 43.6px;
 }
+
+/* ── Icon button: shared press-spring tactility ───────────────────────────
+   Applied to the wrapper divs around small icon SVGs (back-arrow, close-X
+   in result mode). Idle uses a back.out spring so the release after a press
+   pops slightly; the press itself snaps fast (linear-ish) so the button
+   feels firm under the finger. */
+.icon-button {
+  display: inline-flex;
+  transition: transform 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  will-change: transform;
+}
+.icon-button:active {
+  transform: scale(0.92);
+  transition: transform 80ms ease-out;
+}
+
+/* Hover flourish for the back arrow — the icon nudges left, telegraphing
+   "go back". Transition lives on the SVG itself so it springs back when
+   hover ends. */
+.back-arrow-icon {
+  transition: transform 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.icon-button:hover .back-arrow-icon {
+  transform: translateX(-2px);
+}
+
+/* Rotation origin for the X cross arms — center of the 78.198 × 87.165
+   background rect in viewBox units. The hover spin (single 360° rotation
+   with a back.out bounce) is fired via WAAPI in ui.tsx — no CSS needed. */
+.x-cross {
+  transform-box: view-box;
+  transform-origin: 39.1px 43.6px;
+}

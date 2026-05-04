@@ -48,9 +48,11 @@ import { Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
 type Phase = 'splash' | 'contracting' | 'idle' | 'loading';
 
 // ── Tracks whether the intro has already played this session ──────────────────
-// Module-level so it survives IdleView unmount/remount (e.g. after pressing X),
-// but resets on a full page reload (i.e. fresh app launch).
-let hasLaunched = false;
+// Stored on `window` so the flag survives both IdleView unmount/remount (e.g.
+// after pressing X) AND Vite HMR module re-evaluation (which would re-declare
+// a module-level `let`). Resets on a full page reload (fresh app launch).
+const _hl = () => !!(window as any).__convertrLaunched;
+const _markLaunched = () => { (window as any).__convertrLaunched = true; };
 
 // ── Main view ────────────────────────────────────────────────────────────────
 const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (props) => {
@@ -81,7 +83,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   });
 
   // ── Phase state ────────────────────────────────────────────────────────────
-  const [phase, setPhase] = createSignal<Phase>(hasLaunched ? 'idle' : 'splash');
+  const [phase, setPhase] = createSignal<Phase>(_hl() ? 'idle' : 'splash');
   const isIdle = createMemo(() => phase() === 'idle');
   const isLoading = createMemo(() => phase() === 'loading');
 
@@ -202,20 +204,30 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   let dotBg!: HTMLDivElement;
 
   onMount(() => {
-    if (!hasLaunched) {
-      hasLaunched = true;
+    if (!_hl()) {
+      _markLaunched();
       startTimers();
     }
     onCleanup(() => { clearTimeout(t1); clearTimeout(t2); });
 
-    // Track viewport size so idle bbox stays responsive on resize
-    const vw0 = rootEl.offsetWidth, vh0 = rootEl.offsetHeight;
-    setVp({ vw: vw0, vh: vh0 });
-    // Initialize guide lines at SPLASH pixel positions before first animation
+    const vw0 = rootEl.offsetWidth  || window.innerWidth;
+    const vh0 = rootEl.offsetHeight || window.innerHeight;
+
+    // Strip any residual transitions so the seed below is always an instant
+    // snap — prevents leftover transitions (e.g. from HMR module reload)
+    // from animating the seed and causing a wrong-direction expansion.
+    [vLineL, vLineR, hLineT, hLineB].forEach(el => { el.style.transition = 'none'; });
+    [crossTL, crossTR, crossBL, crossBR].forEach(el => { el.style.transition = 'none'; });
+    dotBg.style.transition = 'none';
+    void vLineL.offsetHeight;
+
+    // Seed guide-line transforms at SPLASH positions BEFORE setVp so the
+    // reactive effect doesn't animate from `transform: none` to SPLASH.
     vLineL.style.transform = `translateX(${vw0 * 0.028}px)`;
     vLineR.style.transform = `translateX(${vw0 * 0.972}px)`;
     hLineT.style.transform = `translateY(${vh0 * 0.0613}px)`;
     hLineB.style.transform = `translateY(${vh0 * 0.924}px)`;
+    setVp({ vw: vw0, vh: vh0 });
     const ro = new ResizeObserver(() => {
       setVp({ vw: rootEl.offsetWidth, vh: rootEl.offsetHeight });
     });
@@ -247,27 +259,31 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
 
   // When remounting after a video cancel, skip the first transition so
   // guide lines and crosshairs don't animate from SPLASH to idle out of sync.
-  let skipTransition = hasLaunched;
+  let skipTransition = _hl();
 
   // Apply guide positions whenever phase or dial values change.
-  // Staggered p1/p2 rhythm: horizontal axis (left) unfolds first, vertical
-  // axis (top) follows after p2_delay — matches the cinematic principle used
-  // by the editor. Skipped on the initial remount after a video cancel so
-  // the lines don't flicker from SPLASH → idle.
+  // Staggered p1/p2 rhythm: horizontal guide lines (top/bottom walls,
+  // moving along the Y-axis) animate FIRST. Vertical guide lines
+  // (left/right walls, moving along the X-axis) follow after STAGGER_DELAY.
+  // Skipped on the initial remount after a video cancel so the lines
+  // don't flicker from SPLASH → idle.
   const STAGGER_P1 = 0.35;
   const STAGGER_P2 = 0.35;
   const STAGGER_DELAY = 0.35;
   createEffect(() => {
     const l = gl(), r = gr(), t = gt(), b = gb();
+    const { vw, vh } = vp();
+    const ph = phase();
+    if (vw === 0 || vh === 0) return;
     const skip = skipTransition;
     if (skipTransition) skipTransition = false;
-    const trLeft = skip ? `0s ${guideEase}` : `${STAGGER_P1}s ${guideEase}`;
-    const trTop  = skip ? `0s ${guideEase}` : `${STAGGER_P2}s ${guideEase} ${STAGGER_DELAY}s`;
+    // Horizontal lines (Y-axis = trTop) animate FIRST, no delay.
+    // Vertical lines (X-axis = trLeft) animate SECOND with STAGGER_DELAY.
+    const trTop  = skip ? `0s ${guideEase}` : `${STAGGER_P1}s ${guideEase}`;
+    const trLeft = skip ? `0s ${guideEase}` : `${STAGGER_P2}s ${guideEase} ${STAGGER_DELAY}s`;
 
     // Resolve pixel positions for compositor-only line transforms
-    const { vw, vh } = vp();
     let lPx: number, rPx: number, tPx: number, bPx: number;
-    const ph = phase();
     if (ph === 'splash') {
       lPx = vw * 0.028; rPx = vw * 0.972; tPx = vh * 0.0613; bPx = vh * 0.924;
     } else if (ph === 'loading') {
@@ -285,6 +301,13 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     [crossTL, crossTR, crossBL, crossBR].forEach(el => {
       el.style.transition = `top ${trTop}, left ${trLeft}`;
     });
+    dotBg.style.transition = `left ${trLeft}, width ${trLeft}, top ${trTop}, height ${trTop}, opacity ${trLeft}`;
+    // Force a layout flush so the new transition strings are committed BEFORE
+    // any transform/position writes below — without this, when the same effect
+    // re-runs on a phase change, the browser sees the transition string and
+    // the target transform change in the same synchronous batch and can elide
+    // the animation. Mirrors the trick used in EditorView's applyTr.
+    void vLineL.offsetHeight;
     vLineL.style.transform = `translateX(${lPx}px)`;
     vLineR.style.transform = `translateX(${rPx}px)`;
     hLineT.style.transform = `translateY(${tPx}px)`;
@@ -293,9 +316,6 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     crossTR.style.top  = `calc(${t} - 10px)`;  crossTR.style.left = `calc(${r} - 10px)`;
     crossBL.style.top  = `calc(${b} - 10px)`;  crossBL.style.left = `calc(${l} - 10px)`;
     crossBR.style.top  = `calc(${b} - 10px)`;  crossBR.style.left = `calc(${r} - 10px)`;
-    // Dot bg rides the same stagger: left/width on the horizontal phase,
-    // top/height on the vertical phase.
-    dotBg.style.transition = `left ${trLeft}, width ${trLeft}, top ${trTop}, height ${trTop}, opacity ${trLeft}`;
     dotBg.style.left   = l;
     dotBg.style.top    = t;
     dotBg.style.width  = `calc(${r} - ${l})`;
@@ -535,16 +555,22 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       />
 
       {/* ── Guide lines ───────────────────────────────────────────────────── */}
-      <GuideLine orientation="v" ref={el => { vLineL = el; }} />
-      <GuideLine orientation="v" ref={el => { vLineR = el; }} />
-      <GuideLine orientation="h" ref={el => { hLineT = el; }} />
-      <GuideLine orientation="h" ref={el => { hLineB = el; }} />
+      {/* Initial transforms seeded inline (in viewport units) so each line
+          starts at its respective edge from the very first paint, not at
+          translateX(0)/translateY(0) — otherwise both vertical lines would
+          briefly appear at the left edge before onMount seeds them. */}
+      <GuideLine orientation="v" ref={el => { vLineL = el; el.style.transform = 'translateX(2.8vw)'; }} />
+      <GuideLine orientation="v" ref={el => { vLineR = el; el.style.transform = 'translateX(97.2vw)'; }} />
+      <GuideLine orientation="h" ref={el => { hLineT = el; el.style.transform = 'translateY(6.13vh)'; }} />
+      <GuideLine orientation="h" ref={el => { hLineB = el; el.style.transform = 'translateY(92.4vh)'; }} />
 
       {/* ── Corner crosshairs ─────────────────────────────────────────────── */}
-      <CornerCrosshair ref={el => crossTL = el} />
-      <CornerCrosshair ref={el => crossTR = el} />
-      <CornerCrosshair ref={el => crossBL = el} />
-      <CornerCrosshair ref={el => crossBR = el} />
+      {/* Same rationale — seed initial top/left so each corner starts at its
+          splash position rather than at viewport (0,0). */}
+      <CornerCrosshair ref={el => { crossTL = el; el.style.top = 'calc(6.13vh - 10px)';  el.style.left = 'calc(2.8vw - 10px)';  }} />
+      <CornerCrosshair ref={el => { crossTR = el; el.style.top = 'calc(6.13vh - 10px)';  el.style.left = 'calc(97.2vw - 10px)'; }} />
+      <CornerCrosshair ref={el => { crossBL = el; el.style.top = 'calc(92.4vh - 10px)';  el.style.left = 'calc(2.8vw - 10px)';  }} />
+      <CornerCrosshair ref={el => { crossBR = el; el.style.top = 'calc(92.4vh - 10px)';  el.style.left = 'calc(97.2vw - 10px)'; }} />
 
       {/* ── Center crosshair (idle only) ──────────────────────────────────── */}
       <div style={{ position: 'absolute', top: 'calc(50% - 10px)', left: 'calc(50% - 10px)', opacity: isIdle() ? '1' : '0', transition: 'opacity 0.3s ease' }}>
