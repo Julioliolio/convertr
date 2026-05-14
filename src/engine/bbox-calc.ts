@@ -10,9 +10,12 @@ export interface BBoxTargets {
 const DEFAULT_ASPECT = 16 / 9;
 const PADDING = 32;
 
-// Idle state: bbox occupies a moderate centered area
-const IDLE_W_RATIO = 0.64;
-const IDLE_H_RATIO = 0.50;
+// Idle state: bbox occupies a moderate centered area. The W/H ratios are
+// balanced so that as the idle aspect cycles (see IDLE_RATIOS in IdleView),
+// both width AND height change — letting the existing top→bottom / left→right
+// stagger in IdleView's guide-transition effect read clearly.
+const IDLE_W_RATIO = 0.60;
+const IDLE_H_RATIO = 0.65;
 
 export function calculateBBoxTargets(
   canvasW: number,
@@ -25,15 +28,16 @@ export function calculateBBoxTargets(
   }
 
   if (state === 'idle') {
-    // Default centered box
+    // Default centered box; mediaAspect lets the idle bbox cycle through
+    // common video shapes (passed in by IdleView for the spin-driven cycle).
+    const aspect = mediaAspect ?? DEFAULT_ASPECT;
     let bboxW = canvasW * IDLE_W_RATIO;
     let bboxH = canvasH * IDLE_H_RATIO;
-    // Constrain to default aspect ratio
     const currentAspect = bboxW / bboxH;
-    if (currentAspect > DEFAULT_ASPECT) {
-      bboxW = bboxH * DEFAULT_ASPECT;
+    if (currentAspect > aspect) {
+      bboxW = bboxH * aspect;
     } else {
-      bboxH = bboxW / DEFAULT_ASPECT;
+      bboxH = bboxW / aspect;
     }
     const x1 = (canvasW - bboxW) / 2;
     const y1 = (canvasH - bboxH) / 2;

@@ -3,17 +3,21 @@ import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import { setAppState } from '../../state/app';
 import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
-import { pct } from '../../shared/utils';
+import { pct, scrambleText } from '../../shared/utils';
 import CarrierBricks from '../loading/CarrierBricks';
 
 // ── Guide positions ───────────────────────────────────────────────────────────
 const SPLASH = { GL: '2.8%',  GR: '97.2%', GT: '6.13%', GB: '92.4%'  };
 
+// Idle bbox cycles through these aspect ratios — one step forward per cross
+// spin. Order: HD widescreen → vertical mobile → 4:3 → square, then loops.
+const IDLE_RATIOS = [16 / 9, 9 / 16, 4 / 3, 1 / 1];
+
 // Compute idle bounding box guide percentages from actual viewport dimensions.
 // Uses the same logic as bbox-calc.ts so the idle box is always properly centered
 // and aspect-ratio-constrained regardless of window size.
-function computeIdlePos(vw: number, vh: number) {
-  const { x1, y1, x2, y2 } = calculateBBoxTargets(vw, vh, null, 'idle');
+function computeIdlePos(vw: number, vh: number, aspect: number) {
+  const { x1, y1, x2, y2 } = calculateBBoxTargets(vw, vh, aspect, 'idle');
   return {
     x1, y1, x2, y2,
     gl: pct(x1, vw), gr: pct(x2, vw),
@@ -43,7 +47,7 @@ function computeLoadingPos(vw: number, vh: number) {
 }
 
 import { ACCENT, BG, DOT_BG_IMAGE } from '../../shared/tokens';
-import { Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
+import { Chip, Cross, CornerCrosshair, GuideLine } from '../../shared/ui';
 
 type Phase = 'splash' | 'contracting' | 'idle' | 'loading';
 
@@ -71,10 +75,17 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
 
   // ── Viewport size (drives responsive idle bbox) ────────────────────────────
   const [vp, setVp] = createSignal({ vw: 0, vh: 0 });
+  // Index into IDLE_RATIOS — advanced by the spin interval so each cross
+  // rotation lands the bbox on a new shape. Reactive so the idlePos memo
+  // recomputes and the existing guide-transition effect smoothly animates
+  // the lines / corner crosses to the new positions.
+  const [bboxRatioIndex, setBboxRatioIndex] = createSignal(0);
+  const currentIdleAspect = createMemo(() => IDLE_RATIOS[bboxRatioIndex() % IDLE_RATIOS.length]);
   const idlePos = createMemo(() => {
     const { vw, vh } = vp();
-    if (vw <= 0 || vh <= 0) return computeIdlePos(1, 1); // safe fallback
-    return computeIdlePos(vw, vh);
+    const aspect = currentIdleAspect();
+    if (vw <= 0 || vh <= 0) return computeIdlePos(1, 1, aspect); // safe fallback
+    return computeIdlePos(vw, vh, aspect);
   });
   const loadingPos = createMemo(() => {
     const { vw, vh } = vp();
@@ -202,6 +213,42 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   let crossTL!: HTMLDivElement, crossTR!: HTMLDivElement;
   let crossBL!: HTMLDivElement, crossBR!: HTMLDivElement;
   let dotBg!: HTMLDivElement;
+  let centerCrossEl!: HTMLDivElement;
+
+  // ── Idle spin for the center cross ───────────────────────────────────────
+  // Every IDLE_SPIN_INTERVAL_MS the cross does one full spin plus a 90°
+  // overshoot (0° → 450°), then springs back to 360° (visually 0°). Per-
+  // segment easing: the spin uses an ease-out curve so it decelerates into
+  // the peak, and the return uses a cubic-bezier with y2 > 1 so the cross
+  // briefly undershoots past 360° before settling — that's the "spring".
+  const IDLE_SPIN_DURATION_MS = 700;
+  const IDLE_SPIN_INTERVAL_MS = 3000;
+  // Peak at 50% — symmetric wind-up and spring-back. The bbox transition
+  // (both axes simultaneous, see STAGGER_P1/P2 below) runs for the full
+  // spin duration and settles together with the cross at 700ms.
+  const IDLE_SPIN_PEAK_OFFSET = 0.50;
+
+  createEffect(() => {
+    // Pause the idle spin whenever the user is hovering inside the bbox —
+    // the hint chips are taking attention; the cross shouldn't compete.
+    if (!isIdle() || hoveringBbox()) return;
+    const interval = setInterval(() => {
+      if (!centerCrossEl) return;
+      centerCrossEl.animate(
+        [
+          { offset: 0,                    transform: 'rotate(0deg)',   easing: 'cubic-bezier(0.34, 0.0, 0.4, 1.0)' },
+          { offset: IDLE_SPIN_PEAK_OFFSET, transform: 'rotate(450deg)', easing: 'cubic-bezier(0.5, 0.0, 0.4, 1.15)' },
+          { offset: 1,                    transform: 'rotate(360deg)' },
+        ],
+        { duration: IDLE_SPIN_DURATION_MS },
+      );
+      // Bbox cycles to the next aspect ratio in lockstep with the spin —
+      // the idlePos memo recomputes and the guide-transition effect carries
+      // the lines / corner crosses to the new positions over ~700ms.
+      setBboxRatioIndex(i => (i + 1) % IDLE_RATIOS.length);
+    }, IDLE_SPIN_INTERVAL_MS);
+    onCleanup(() => clearInterval(interval));
+  });
 
   onMount(() => {
     if (!_hl()) {
@@ -262,14 +309,13 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   let skipTransition = _hl();
 
   // Apply guide positions whenever phase or dial values change.
-  // Staggered p1/p2 rhythm: horizontal guide lines (top/bottom walls,
-  // moving along the Y-axis) animate FIRST. Vertical guide lines
-  // (left/right walls, moving along the X-axis) follow after STAGGER_DELAY.
-  // Skipped on the initial remount after a video cancel so the lines
-  // don't flicker from SPLASH → idle.
-  const STAGGER_P1 = 0.35;
-  const STAGGER_P2 = 0.35;
-  const STAGGER_DELAY = 0.35;
+  // Both axes move simultaneously, matching the full cross-spin duration so
+  // the bbox shape transition lands together with the cross resolving back
+  // to 360°. Skipped on the initial remount after a video cancel so the
+  // lines don't flicker from SPLASH → idle.
+  const STAGGER_P1 = 0.70;  // Y-axis duration (matches full cross spin)
+  const STAGGER_P2 = 0.70;  // X-axis duration (matches full cross spin)
+  const STAGGER_DELAY = 0;  // no leading delay — both start with the spin
   createEffect(() => {
     const l = gl(), r = gr(), t = gt(), b = gb();
     const { vw, vh } = vp();
@@ -324,7 +370,29 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
 
   // ── File / URL handlers ────────────────────────────────────────────────────
   const [dragOver, setDragOver] = createSignal(false);
+  const [hoveringBbox, setHoveringBbox] = createSignal(false);
   const [fetchStatus, setFetchStatus] = createSignal<string | null>(null);
+
+  // ── Hover hint chips: text scrambles in on reveal ────────────────────────
+  // Both lines start at their final value; each hover transition replays the
+  // shared scrambleText util (same defaults as EditorView's chips). The
+  // monospace font keeps chip width stable while characters resolve.
+  const HINT_LINE_1 = 'DROP A FILE OR';
+  const HINT_LINE_2 = 'PASTE A URL';
+  const [hintLine1, setHintLine1] = createSignal(HINT_LINE_1);
+  const [hintLine2, setHintLine2] = createSignal(HINT_LINE_2);
+  let hintScrambleRaf = 0;
+  createEffect(() => {
+    if (!isIdle() || !hoveringBbox()) return;
+    hintScrambleRaf = scrambleText(
+      [
+        { target: HINT_LINE_1, setter: setHintLine1 },
+        { target: HINT_LINE_2, setter: setHintLine2 },
+      ],
+      hintScrambleRaf,
+    );
+  });
+  onCleanup(() => cancelAnimationFrame(hintScrambleRaf));
   let fileInputRef!: HTMLInputElement;
 
   // Seed fps + width sliders from the source video's own metadata so opening
@@ -538,9 +606,15 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
-      {/* ── Dotted background inside bounding box ────────────────────────── */}
+      {/* ── Dotted background inside bounding box ──────────────────────────
+          Captures hover events so the center-cross hint label appears only
+          when the cursor is actually inside the bbox (not anywhere on the
+          page). pointer-events flips to 'none' outside the idle phase so
+          the loading bar / drop handlers aren't shadowed. */}
       <div
         ref={dotBg}
+        onMouseEnter={() => setHoveringBbox(true)}
+        onMouseLeave={() => setHoveringBbox(false)}
         style={{
           position: 'absolute',
           left: SPLASH.GL, top: SPLASH.GT,
@@ -550,7 +624,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
           'background-size': '32px 32px',
           'background-position': '50% 50%',
           opacity: '1',
-          'pointer-events': 'none',
+          'pointer-events': isIdle() ? 'auto' : 'none',
         }}
       />
 
@@ -572,9 +646,49 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       <CornerCrosshair ref={el => { crossBL = el; el.style.top = 'calc(92.4vh - 10px)';  el.style.left = 'calc(2.8vw - 10px)';  }} />
       <CornerCrosshair ref={el => { crossBR = el; el.style.top = 'calc(92.4vh - 10px)';  el.style.left = 'calc(97.2vw - 10px)'; }} />
 
-      {/* ── Center crosshair (idle only) ──────────────────────────────────── */}
-      <div style={{ position: 'absolute', top: 'calc(50% - 10px)', left: 'calc(50% - 10px)', opacity: isIdle() ? '1' : '0', transition: 'opacity 0.3s ease' }}>
-        <Cross />
+      {/* ── Center crosshair + hover hint (idle only) ─────────────────────
+          Cross stays anchored at viewport center via top/left calc(50% - 10px).
+          The hint label sits to the right of the cross in the same flex row,
+          fading in only while the cursor is inside the bbox. The container is
+          pointer-events: 'none' so it never intercepts hover detection on the
+          dotted background underneath. */}
+      <div style={{
+        position: 'absolute',
+        top: 'calc(50% - 10px)',
+        left: 'calc(50% - 10px)',
+        display: 'flex',
+        'align-items': 'flex-start',
+        gap: '8px',
+        opacity: isIdle() ? '1' : '0',
+        transition: 'opacity 0.3s ease',
+        'pointer-events': 'none',
+      }}>
+        <Cross ref={el => centerCrossEl = el} />
+        <div style={{
+          display: 'flex',
+          'flex-direction': 'column',
+          'align-items': 'flex-start',
+        }}>
+          {/* Each chip sits inside a clip-path wrapper so the magenta bg
+              sweeps in from the left on hover — matches the FormatButton
+              dropdown's reveal (FORMAT_SPRING in editor/FormatPicker.tsx):
+              200ms with a slight overshoot ease. clip-path: inset(0 100% 0 0)
+              hides the chip; inset(0 0 0 0) reveals it left → right. */}
+          <div style={{
+            display: 'inline-block',
+            'clip-path': isIdle() && hoveringBbox() ? 'inset(0 0 0 0)' : 'inset(0 100% 0 0)',
+            transition: 'clip-path 200ms cubic-bezier(0.006, 0.984, 0.000, 1.109)',
+          }}>
+            <Chip>{hintLine1()}</Chip>
+          </div>
+          <div style={{
+            display: 'inline-block',
+            'clip-path': isIdle() && hoveringBbox() ? 'inset(0 0 0 0)' : 'inset(0 100% 0 0)',
+            transition: 'clip-path 200ms cubic-bezier(0.006, 0.984, 0.000, 1.109)',
+          }}>
+            <Chip>{hintLine2()}</Chip>
+          </div>
+        </div>
       </div>
 
       {/* ── Loading bar (Option 5) — fills the morphed bbox while uploading
@@ -596,20 +710,6 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
         'pointer-events': isLoading() ? 'auto' : 'none',
       }}>
         <CarrierBricks progress={loadingProgress()} height={LOADING_BAR_H_PX} />
-      </div>
-
-      {/* ── Helper text ───────────────────────────────────────────────────── */}
-      <div style={{
-        position: 'absolute', bottom: idlePos().helperBottom,
-        left: idlePos().gl, right: `calc(100% - ${idlePos().gr})`,
-        display: 'flex', 'flex-direction': 'column', 'align-items': 'center',
-        'text-align': 'center',
-        overflow: 'hidden',
-        opacity: isIdle() ? '1' : '0',
-        transition: `opacity ${p.helper_fade_dur}s ease`,
-      }}>
-        <span style={{ 'font-family': "'IBM Plex Mono', system-ui, monospace", 'font-weight': '500', 'font-size': 'clamp(9px, 2vw, 12px)', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>DROP A FILE OR URL</span>
-        <span style={{ 'font-family': "'IBM Plex Sans', system-ui, sans-serif", 'font-weight': '500', 'font-size': 'clamp(9px, 2vw, 12px)', 'line-height': '16px', color: ACCENT, 'white-space': 'nowrap' }}>click to browse or ctrl+v anywhere</span>
       </div>
 
       {/* ── URL fetch status ──────────────────────────────────────────────── */}

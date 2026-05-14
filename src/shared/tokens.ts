@@ -8,4 +8,4 @@ export const MONO      = "'IBM Plex Mono', system-ui, monospace";
 
 // Shared 32px dotted background — used by idle splash, editor result frame,
 // and anywhere else we want the Paper-style visible-grid feel.
-export const DOT_BG_IMAGE = `radial-gradient(circle, ${ACCENT_50} 1px, transparent 1px)`;
+export const DOT_BG_IMAGE = `radial-gradient(circle, ${ACCENT_50} 1.5px, transparent 1.5px)`;

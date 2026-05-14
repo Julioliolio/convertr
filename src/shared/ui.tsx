@@ -344,8 +344,8 @@ export const Chip = (p: { children: JSX.Element; size?: 'base' | 'xs' }) => (
 const CROSS_ARM_V = { position: 'absolute' as const, left: '9px', top: '0',  width: '2px',  height: '20px', background: ACCENT };
 const CROSS_ARM_H = { position: 'absolute' as const, left: '0',  top: '9px', width: '20px', height: '2px',  background: ACCENT };
 
-export const Cross = () => (
-  <div style={{ position: 'relative', 'flex-shrink': '0', width: '20px', height: '20px' }}>
+export const Cross: Component<{ ref?: (el: HTMLDivElement) => void }> = (p) => (
+  <div ref={p.ref} style={{ position: 'relative', 'flex-shrink': '0', width: '20px', height: '20px' }}>
     <div style={CROSS_ARM_V} />
     <div style={CROSS_ARM_H} />
   </div>
