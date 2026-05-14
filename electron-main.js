@@ -1,8 +1,7 @@
-const { app, BrowserWindow, ipcMain, nativeImage, dialog } = require('electron/main');
+const { app, BrowserWindow, ipcMain, nativeImage, dialog, shell } = require('electron/main');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
-const { autoUpdater } = require('electron-updater');
 
 // GPU rasterization must be set before app is ready
 app.commandLine.appendSwitch('enable-gpu-rasterization');
@@ -181,22 +180,45 @@ ipcMain.handle('get-output-path', async (_event, jobId) => {
   }
 });
 
-function setupAutoUpdater() {
+function isNewerVersion(remote, local) {
+  const parse = (v) => v.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const r = parse(remote);
+  const l = parse(local);
+  for (let i = 0; i < Math.max(r.length, l.length); i++) {
+    const rn = r[i] || 0;
+    const ln = l[i] || 0;
+    if (rn !== ln) return rn > ln;
+  }
+  return false;
+}
+
+async function checkForUpdate() {
   if (!app.isPackaged) return;
-
-  autoUpdater.checkForUpdates();
-
-  autoUpdater.on('update-downloaded', () => {
-    dialog.showMessageBox({
-      type: 'info',
-      title: 'Update ready',
-      message: 'A new version of Convertr has been downloaded. Restart to apply the update.',
-      buttons: ['Restart now', 'Later'],
-      defaultId: 0,
-    }).then(({ response }) => {
-      if (response === 0) autoUpdater.quitAndInstall();
+  try {
+    const res = await fetch('https://api.github.com/repos/Julioliolio/convertr/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Convertr' },
     });
-  });
+    if (!res.ok) return;
+    const data = await res.json();
+    const remote = (data.tag_name || '').replace(/^v/, '');
+    const local = app.getVersion();
+    if (!remote || !isNewerVersion(remote, local)) return;
+
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Update available',
+      message: `Convertr ${remote} is available`,
+      detail: `You're running ${local}. Open the download page?`,
+      buttons: ['Download', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) {
+      shell.openExternal(data.html_url || 'https://github.com/Julioliolio/convertr/releases/latest');
+    }
+  } catch (err) {
+    console.error('[Convertr] update check failed:', err.message);
+  }
 }
 
 app.whenReady().then(() => {
@@ -205,7 +227,7 @@ app.whenReady().then(() => {
   startServer(0).then((port) => {
     serverPort = port;
     createWindow(port);
-    setupAutoUpdater();
+    checkForUpdate();
   });
 
   app.on('activate', () => {
