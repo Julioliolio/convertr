@@ -9,7 +9,7 @@ import { appState, setAppState, type OutputFormat } from '../../state/app';
 import { ACCENT, BG, MONO, DOT_BG_IMAGE } from '../../shared/tokens';
 import { XSvg, BackArrowSvg, SettingsSvg, Chip, Cross, CornerCrosshair, GuideLine, buttonProps } from '../../shared/ui';
 import LoadingOverlay from '../LoadingOverlay';
-import { fmtBytes, pct, extractFrames, scrambleText, useSmoothedProgress } from '../../shared/utils';
+import { fmtBytes, pct, extractFrames, extractFrame, scrambleText, useSmoothedProgress } from '../../shared/utils';
 import FormatPicker    from '../editor/FormatPicker';
 import TrimRow         from '../editor/TrimRow';
 import SettingsColumn  from '../editor/SettingsColumn';
@@ -946,6 +946,30 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
   });
   onCleanup(() => cancelAnimationFrame(resultScrambleRaf));
 
+  // MP3 result thumbnail — single high-res frame grabbed from the source
+  // video at the midpoint of the trim range so the audio result has a hero
+  // image rather than a bare player. Falls back to a styled SVG when the
+  // source can't be decoded (gif input without preview proxy ready, exotic
+  // codecs, etc.). Re-extracts whenever the result flips on so the frame
+  // matches the trim the user just converted from.
+  const [mp3Thumb, setMp3Thumb] = createSignal<string | null>(null);
+  createEffect(() => {
+    if (!hasResult() || appState.outputFormat !== 'mp3') {
+      setMp3Thumb(null);
+      return;
+    }
+    const src = videoRef?.currentSrc || effectiveSrc();
+    if (!src) { setMp3Thumb(null); return; }
+    const mid = (trimEnd() > trimStart())
+      ? (trimStart() + trimEnd()) / 2
+      : (duration() / 2 || 0);
+    let cancelled = false;
+    extractFrame(src, mid, 360).then((thumb) => {
+      if (!cancelled) setMp3Thumb(thumb);
+    });
+    onCleanup(() => { cancelled = true; });
+  });
+
   // Percentage change from source → result. Uses Unicode minus for the
   // negative sign so it visually matches `+` in width. Returns null when
   // we can't compute it (no source size, no result size yet).
@@ -1132,18 +1156,107 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               when={appState.outputFormat === 'gif'}
               fallback={
                 appState.outputFormat === 'mp3' ? (
-                  <audio
-                    src={resultUrl()!}
-                    autoplay loop controls
-                    draggable={true}
+                  <div
                     classList={{ 'result-media': true, 'is-pressed': isResultPressed() }}
-                    {...resultMediaEvents}
                     style={{
-                      'max-width': '100%',
-                      display: 'block',
+                      // Fill the centered inset area — the wrapper has no
+                      // intrinsic size so max-width/max-height alone collapses
+                      // the column to the audio controls' height. width/height
+                      // 100% lets the thumbnail flex-grow into the inset.
+                      width: '100%', height: '100%',
+                      display: 'flex', 'flex-direction': 'column',
+                      background: BG,
                       'pointer-events': 'auto',
+                      // Override the default cursor:grab from .result-media —
+                      // dragging is only initiated from the thumbnail area so
+                      // the controls show the normal pointer.
+                      cursor: 'default',
                     }}
-                  />
+                  >
+                    {/* Thumbnail: drag-source for drop-to-disk. Either a frame
+                        of the source video (when we could decode it) or the
+                        stylized AUDIO fallback. */}
+                    <div
+                      draggable={true}
+                      onDragStart={handleResultDragStart}
+                      onDragEnd={() => setIsResultPressed(false)}
+                      onMouseDown={() => setIsResultPressed(true)}
+                      onMouseUp={() => setIsResultPressed(false)}
+                      onMouseLeave={() => setIsResultPressed(false)}
+                      style={{
+                        flex: '1 1 0', 'min-height': '0',
+                        position: 'relative', overflow: 'hidden',
+                        cursor: isResultPressed() ? 'grabbing' : 'grab',
+                        background: BG,
+                      }}
+                    >
+                      <Show
+                        when={mp3Thumb()}
+                        fallback={
+                          // Equalizer-bar fallback — vertical bars of varying
+                          // heights in ACCENT pink, with a small AUDIO label.
+                          // viewBox 200×100 fills the area uniformly across
+                          // landscape / portrait bboxes.
+                          <div style={{
+                            width: '100%', height: '100%',
+                            display: 'flex', 'flex-direction': 'column',
+                            'align-items': 'center', 'justify-content': 'center',
+                            background: BG, gap: '12px',
+                          }}>
+                            <svg
+                              viewBox="0 0 200 100"
+                              preserveAspectRatio="xMidYMid meet"
+                              aria-hidden="true"
+                              style={{ width: '70%', 'max-width': '320px' }}
+                            >
+                              <rect x="0"   y="45" width="10" height="10" fill={ACCENT} />
+                              <rect x="18"  y="30" width="10" height="40" fill={ACCENT} />
+                              <rect x="36"  y="20" width="10" height="60" fill={ACCENT} />
+                              <rect x="54"  y="5"  width="10" height="90" fill={ACCENT} />
+                              <rect x="72"  y="30" width="10" height="40" fill={ACCENT} />
+                              <rect x="90"  y="15" width="10" height="70" fill={ACCENT} />
+                              <rect x="108" y="0"  width="10" height="100" fill={ACCENT} />
+                              <rect x="126" y="25" width="10" height="50" fill={ACCENT} />
+                              <rect x="144" y="12" width="10" height="76" fill={ACCENT} />
+                              <rect x="162" y="33" width="10" height="34" fill={ACCENT} />
+                              <rect x="180" y="42" width="10" height="16" fill={ACCENT} />
+                            </svg>
+                            <div style={{
+                              'font-family': MONO,
+                              'font-size': '14px', 'line-height': '20px',
+                              color: ACCENT, 'letter-spacing': '0.15em',
+                            }}>AUDIO</div>
+                          </div>
+                        }
+                      >
+                        <img
+                          src={mp3Thumb()!}
+                          alt="Source frame"
+                          draggable={false}
+                          style={{
+                            width: '100%', height: '100%',
+                            'object-fit': 'cover',
+                            display: 'block',
+                            'pointer-events': 'none',
+                          }}
+                        />
+                      </Show>
+                    </div>
+                    {/* Native audio controls — scrub bar, play/pause, volume,
+                        download menu. Kept outside the drag-source div so
+                        clicking play doesn't initiate a drag, and the
+                        wrapper's :hover scale doesn't read as the controls
+                        themselves being interactive. */}
+                    <audio
+                      src={resultUrl()!}
+                      autoplay loop controls
+                      style={{
+                        width: '100%',
+                        display: 'block',
+                        'flex-shrink': '0',
+                      }}
+                    />
+                  </div>
                 ) : (
                   <video
                     ref={el => { resultVideoRef = el; }}

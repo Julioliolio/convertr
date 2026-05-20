@@ -87,6 +87,38 @@ export const extractFrames = (src: string, duration: number, count: number): Pro
     vid.addEventListener('error', () => finish([]));
   });
 
+/**
+ * Extract one frame from a video at `atTime` seconds at the requested pixel
+ * height (aspect ratio preserved). Used as the MP3 result thumbnail — the
+ * 20-frame timeline strip is only 24px tall and reads as mush at hero size.
+ * Resolves with a JPEG dataURL, or null if the source can't be decoded /
+ * decoding takes too long.
+ */
+export const extractFrame = (src: string, atTime: number, height = 360, timeoutMs = 5000): Promise<string | null> =>
+  new Promise((resolve) => {
+    const vid = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { resolve(null); return; }
+    let resolved = false;
+    const finish = (out: string | null) => { if (resolved) return; resolved = true; resolve(out); };
+    vid.muted = true; vid.preload = 'auto'; vid.src = src;
+    vid.addEventListener('error', () => finish(null));
+    vid.addEventListener('seeked', () => {
+      try {
+        ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+        finish(canvas.toDataURL('image/jpeg', 0.85));
+      } catch { finish(null); }
+    });
+    vid.addEventListener('loadedmetadata', () => {
+      if (!vid.videoWidth || !vid.videoHeight) { finish(null); return; }
+      const w = Math.round(height * vid.videoWidth / vid.videoHeight);
+      canvas.width = w; canvas.height = height;
+      vid.currentTime = Math.max(0, Math.min(atTime, vid.duration || atTime)) + 0.01;
+    });
+    setTimeout(() => finish(null), timeoutMs);
+  });
+
 // ── Scramble text animation ───────────────────────────────────────────────────
 // Animates one or more strings from random chars to a target string, left to right.
 // Used by the EXPECTED SIZE chip, the format picker, and the dither tooltip.
