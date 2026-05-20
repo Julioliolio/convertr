@@ -176,6 +176,7 @@ const VideoSettings: Component<{
   };
 
   const isGif = () => appState.outputFormat === 'gif';
+  const isMp3 = () => appState.outputFormat === 'mp3';
   const supportsH265 = () => H265_CAPABLE.has(appState.outputFormat);
   // Fast-cut is only meaningful when we can stream-copy — same container in/out
   // and non-GIF. We still render the toggle disabled for context in other
@@ -204,14 +205,15 @@ const VideoSettings: Component<{
   // gets a sensible value for the codec it's about to use.
   createEffect(() => {
     const fmt = appState.outputFormat;
-    if (fmt === 'gif') return; // gif path doesn't read CRF
+    if (fmt === 'gif' || fmt === 'mp3') return; // gif/mp3 paths don't read CRF
     if (fmt === 'webm')                     setAppState('crf', OPTIMAL_CRF.vp9);
     else if (supportsH265() && appState.codec === 'h265') setAppState('crf', OPTIMAL_CRF.h265);
     else                                    setAppState('crf', OPTIMAL_CRF.h264);
   });
 
   // Total rendered boxes (for the staggered exit): width, fps, [toggles], canvas.
-  const totalBoxes = () => isGif() ? 3 : 4;
+  // MP3 hides width/fps/canvas — only the audio-bitrate hint chip is shown.
+  const totalBoxes = () => isMp3() ? 1 : isGif() ? 3 : 4;
 
   return (
     <div ref={panelRef} style={{
@@ -220,71 +222,91 @@ const VideoSettings: Component<{
       padding: pad(),
       'font-family': MONO, 'box-sizing': 'border-box',
     }}>
-      {/* ── Width (resolution) ── */}
-      <div style={{ 'flex-shrink': '0', ...boxAnim(props.open, 0, totalBoxes()) }}>
-        <DesignSlider
-          ticks={WIDTH_TICKS}
-          value={widthValue()}
-          onChange={setWidthValue}
-          unit="px"
-        />
-      </div>
-
-      {/* ── FPS ── */}
-      <div style={{ 'flex-shrink': '0', ...boxAnim(props.open, 1, totalBoxes()) }}>
-        <DesignSlider
-          ticks={FPS_TICKS}
-          value={appState.fps}
-          onChange={(v) => setAppState('fps', v)}
-          unit="fps"
-        />
-      </div>
-
-      {/* ── Non-GIF: codec / audio / fast-cut toggles ── */}
-      <Show when={!isGif()}>
-        <div style={{
-          'flex-shrink': '0',
-          display: 'grid',
-          'grid-template-columns': toggleCols(),
-          gap: '6px',
-          ...boxAnim(props.open, 2, totalBoxes()),
-        }}>
-          <Show when={supportsH265()}>
-            <Toggle
-              label="H.265"
-              hint="Use H.265 (HEVC) instead of H.264 — ~30% smaller, less compatible."
-              on={() => appState.codec === 'h265'}
-              onToggle={(on) => setAppState('codec', on ? 'h265' : 'h264')}
-            />
-          </Show>
-          <Toggle
-            label="Audio"
-            hint="Include the source audio track in the output."
-            on={() => appState.audio}
-            onToggle={(on) => setAppState('audio', on)}
-          />
-          <Toggle
-            label="Fast-cut"
-            hint={fastCutEligible()
-              ? 'Stream-copy: near-instant, no re-encode. Cut snaps to nearest keyframe before start.'
-              : `Fast-cut only works when input and output formats match (input: ${appState.inputFormat ?? '?'}).`}
-            on={() => appState.fastCut && fastCutEligible()}
-            onToggle={(on) => setAppState('fastCut', on)}
-            disabled={() => !fastCutEligible()}
+      {/* ── MP3: audio-only path — width/fps/codec/canvas are all meaningless,
+            so the panel just confirms what's about to happen. ── */}
+      <Show
+        when={!isMp3()}
+        fallback={
+          <div style={{
+            'flex-shrink': '0',
+            border: `1px solid ${ACCENT}`,
+            padding: '12px',
+            color: ACCENT,
+            'font-size': '12px',
+            'line-height': '16px',
+            ...boxAnim(props.open, 0, totalBoxes()),
+          }}>
+            <div style={{ 'font-size': '14px', 'margin-bottom': '6px' }}>AUDIO ONLY</div>
+            <div>Extracts the source audio to MP3 at 192 kbps. Video, width, fps and codec settings are ignored.</div>
+          </div>
+        }
+      >
+        {/* ── Width (resolution) ── */}
+        <div style={{ 'flex-shrink': '0', ...boxAnim(props.open, 0, totalBoxes()) }}>
+          <DesignSlider
+            ticks={WIDTH_TICKS}
+            value={widthValue()}
+            onChange={setWidthValue}
+            unit="px"
           />
         </div>
-      </Show>
 
-      {/* ── Canvas preview — dither (GIF) or scaled+fps video (non-GIF) ── */}
-      <div style={{
-        flex: '1 1 0',
-        'min-height': '0',
-        display: 'flex',
-        'flex-direction': 'column',
-        ...boxAnim(props.open, isGif() ? 2 : 3, totalBoxes()),
-      }}>
-        <SettingsCanvas videoEl={props.videoEl} isPortrait={props.isPortrait} />
-      </div>
+        {/* ── FPS ── */}
+        <div style={{ 'flex-shrink': '0', ...boxAnim(props.open, 1, totalBoxes()) }}>
+          <DesignSlider
+            ticks={FPS_TICKS}
+            value={appState.fps}
+            onChange={(v) => setAppState('fps', v)}
+            unit="fps"
+          />
+        </div>
+
+        {/* ── Non-GIF: codec / audio / fast-cut toggles ── */}
+        <Show when={!isGif()}>
+          <div style={{
+            'flex-shrink': '0',
+            display: 'grid',
+            'grid-template-columns': toggleCols(),
+            gap: '6px',
+            ...boxAnim(props.open, 2, totalBoxes()),
+          }}>
+            <Show when={supportsH265()}>
+              <Toggle
+                label="H.265"
+                hint="Use H.265 (HEVC) instead of H.264 — ~30% smaller, less compatible."
+                on={() => appState.codec === 'h265'}
+                onToggle={(on) => setAppState('codec', on ? 'h265' : 'h264')}
+              />
+            </Show>
+            <Toggle
+              label="Audio"
+              hint="Include the source audio track in the output."
+              on={() => appState.audio}
+              onToggle={(on) => setAppState('audio', on)}
+            />
+            <Toggle
+              label="Fast-cut"
+              hint={fastCutEligible()
+                ? 'Stream-copy: near-instant, no re-encode. Cut snaps to nearest keyframe before start.'
+                : `Fast-cut only works when input and output formats match (input: ${appState.inputFormat ?? '?'}).`}
+              on={() => appState.fastCut && fastCutEligible()}
+              onToggle={(on) => setAppState('fastCut', on)}
+              disabled={() => !fastCutEligible()}
+            />
+          </div>
+        </Show>
+
+        {/* ── Canvas preview — dither (GIF) or scaled+fps video (non-GIF) ── */}
+        <div style={{
+          flex: '1 1 0',
+          'min-height': '0',
+          display: 'flex',
+          'flex-direction': 'column',
+          ...boxAnim(props.open, isGif() ? 2 : 3, totalBoxes()),
+        }}>
+          <SettingsCanvas videoEl={props.videoEl} isPortrait={props.isPortrait} />
+        </div>
+      </Show>
     </div>
   );
 };

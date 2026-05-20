@@ -15,9 +15,12 @@ export async function startConversion(trimStart?: number, trimEnd?: number): Pro
   const uploadJobId  = appState.uploadJobId;
   if (!file && !fileUrl) return null;
 
-  // Width: 0 means "keep original". GIF uses .width, everything else .vidWidth.
+  // Width: 0 means "keep original". GIF uses .width, video formats use .vidWidth,
+  // MP3 has no video track so the server ignores width entirely.
   const widthPx = appState.outputFormat === 'gif' ? appState.width : appState.vidWidth;
-  const widthArg = widthPx > 0 ? widthPx : 'original';
+  const widthArg = appState.outputFormat === 'mp3' ? 'original'
+                 : widthPx > 0 ? widthPx
+                 : 'original';
 
   const commonBody = {
     outputFormat: appState.outputFormat,

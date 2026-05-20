@@ -26,6 +26,22 @@ function getDuration(inputPath) {
   });
 }
 
+function getVideoCodec(inputPath) {
+  return new Promise((resolve) => {
+    const ff = spawn(FFPROBE_PATH, [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      inputPath,
+    ]);
+    let out = '';
+    ff.stdout.on('data', d => (out += d));
+    ff.on('error', () => resolve(''));
+    ff.on('close', () => resolve(out.trim().toLowerCase()));
+  });
+}
+
 function getVideoMeta(inputPath) {
   return new Promise((resolve) => {
     const ff = spawn(FFPROBE_PATH, [
@@ -111,6 +127,13 @@ function getCodecArgs(outputFormat, opts) {
   const scaleFilter = width === -1 ? null : `scale=${width}:-2`;
   const keepAudio = audio !== false && audio !== 'false' && audio !== 0 && audio !== '0';
 
+  // Audio-only output: drop video, encode the source's audio track to MP3.
+  // Ignores width/fps/codec/crf/audio-flag — the user picked mp3 specifically
+  // to extract audio, so toggling those would produce a broken file.
+  if (outputFormat === 'mp3') {
+    return ['-vn', '-c:a', 'libmp3lame', '-b:a', '192k'];
+  }
+
   let args;
   switch (outputFormat) {
     case 'webm':
@@ -123,9 +146,14 @@ function getCodecArgs(outputFormat, opts) {
     case 'avi':
     case 'mkv': {
       const vcodec = H265_CAPABLE.has(outputFormat) && codec === 'h265' ? 'libx265' : 'libx264';
+      // yuv420p + hvc1 tag are required for Premiere/FCP to accept the file.
+      // bt709 metadata stops Premiere/AE guessing wrong on SDR HD content.
+      const colorArgs = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709'];
       args = keepAudio
-        ? ['-c:v', vcodec, '-crf', String(crf), '-preset', 'medium', '-c:a', 'aac', '-b:a', '128k']
-        : ['-c:v', vcodec, '-crf', String(crf), '-preset', 'medium', '-an'];
+        ? ['-c:v', vcodec, '-crf', String(crf), '-preset', 'medium', '-pix_fmt', 'yuv420p', ...colorArgs, '-c:a', 'aac', '-b:a', '128k', '-ar', '48000']
+        : ['-c:v', vcodec, '-crf', String(crf), '-preset', 'medium', '-pix_fmt', 'yuv420p', ...colorArgs, '-an'];
+      if (vcodec === 'libx265') args.push('-tag:v', 'hvc1');
+      if (outputFormat === 'mp4' || outputFormat === 'mov') args.push('-movflags', '+faststart');
       break;
     }
     default:
@@ -139,12 +167,18 @@ function getCodecArgs(outputFormat, opts) {
 
 // Args for a "fast cut" — stream-copy with keyframe-aligned trim. Audio is
 // preserved or stripped per the `audio` flag. Produces an identical codec
-// output in seconds rather than re-encoding.
-function getFastCutArgs(audio) {
+// output in seconds rather than re-encoding. Passes sourceCodec + outputFormat
+// so we can rewrite the HEVC tag to hvc1 (Premiere/QuickTime reject hev1) and
+// add +faststart for mp4/mov — both are remux-only, no re-encode.
+function getFastCutArgs(audio, sourceCodec, outputFormat) {
   const keepAudio = audio !== false && audio !== 'false' && audio !== 0 && audio !== '0';
-  return keepAudio
+  const args = keepAudio
     ? ['-c', 'copy', '-avoid_negative_ts', 'make_zero']
     : ['-c:v', 'copy', '-an', '-avoid_negative_ts', 'make_zero'];
+  const isMp4ish = outputFormat === 'mp4' || outputFormat === 'mov';
+  if (isMp4ish && sourceCodec === 'hevc') args.push('-tag:v', 'hvc1');
+  if (isMp4ish) args.push('-movflags', '+faststart');
+  return args;
 }
 
 // Low-res h264 mp4 proxy used as the editor preview for inputs the browser
@@ -183,6 +217,7 @@ function serveJobFile(jobs, req, res, pathKey, asDownload = false) {
 module.exports = {
   FFMPEG_PATH,
   getDuration,
+  getVideoCodec,
   getVideoMeta,
   buildGifFilters,
   runFFmpeg,

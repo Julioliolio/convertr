@@ -15,8 +15,9 @@ import TrimRow         from '../editor/TrimRow';
 import SettingsColumn  from '../editor/SettingsColumn';
 import CarrierBricks   from '../loading/CarrierBricks';
 
-// Server-supported formats (lowercase server-side)
-const FORMATS = ['GIF', 'AVI', 'MP4', 'MOV', 'WEBM', 'MKV'];
+// Server-supported formats (lowercase server-side). MP3 is audio-only — picking
+// it strips the video track and outputs just the source's audio as an MP3.
+const FORMATS = ['GIF', 'AVI', 'MP4', 'MOV', 'WEBM', 'MKV', 'MP3'];
 
 // Space reserved above the video for the top bar (24px pad + 22px btn + 24px bottom margin).
 const TOP_BAR_H_PX = 70;
@@ -323,6 +324,8 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
       const w = appState.width > 0 ? appState.width : srcW;
       const h = Math.round(w * srcH / srcW);
       bytes = (w * h * appState.fps * dur) / 3;
+    } else if (fmt === 'mp3') {
+      bytes = (192_000 / 8) * dur;
     } else {
       const w = appState.vidWidth > 0 ? appState.vidWidth : srcW;
       const h = Math.round(w * srcH / srcW);
@@ -965,7 +968,10 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
     if (!url || !e.dataTransfer) return;
     const fullUrl = new URL(url, window.location.origin).href;
     const filename = resultFilename() || `output.${appState.outputFormat}`;
-    const mime = appState.outputFormat === 'gif' ? 'image/gif' : `video/${appState.outputFormat}`;
+    const fmt = appState.outputFormat;
+    const mime = fmt === 'gif' ? 'image/gif'
+               : fmt === 'mp3' ? 'audio/mpeg'
+               : `video/${fmt}`;
     e.dataTransfer.setData('text/uri-list', fullUrl);
     e.dataTransfer.setData('text/plain', fullUrl);
     e.dataTransfer.setData('DownloadURL', `${mime}:${filename}:${fullUrl}`);
@@ -1125,19 +1131,34 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
             <Show
               when={appState.outputFormat === 'gif'}
               fallback={
-                <video
-                  ref={el => { resultVideoRef = el; }}
-                  src={resultUrl()!}
-                  autoplay loop playsinline
-                  draggable={true}
-                  classList={{ 'result-media': true, 'is-pressed': isResultPressed() }}
-                  {...resultMediaEvents}
-                  style={{
-                    'max-width': '100%', 'max-height': '100%',
-                    display: 'block',
-                    'pointer-events': 'auto',
-                  }}
-                />
+                appState.outputFormat === 'mp3' ? (
+                  <audio
+                    src={resultUrl()!}
+                    autoplay loop controls
+                    draggable={true}
+                    classList={{ 'result-media': true, 'is-pressed': isResultPressed() }}
+                    {...resultMediaEvents}
+                    style={{
+                      'max-width': '100%',
+                      display: 'block',
+                      'pointer-events': 'auto',
+                    }}
+                  />
+                ) : (
+                  <video
+                    ref={el => { resultVideoRef = el; }}
+                    src={resultUrl()!}
+                    autoplay loop playsinline
+                    draggable={true}
+                    classList={{ 'result-media': true, 'is-pressed': isResultPressed() }}
+                    {...resultMediaEvents}
+                    style={{
+                      'max-width': '100%', 'max-height': '100%',
+                      display: 'block',
+                      'pointer-events': 'auto',
+                    }}
+                  />
+                )
               }
             >
               <img

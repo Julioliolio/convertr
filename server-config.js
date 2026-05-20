@@ -23,5 +23,5 @@ module.exports = {
 
   // Supported formats
   VALID_INPUT:  /\.(mp4|mov|avi|mkv|webm|flv|wmv|gif|m4v|ts|mts|3gp|ogv)$/i,
-  VALID_OUTPUT: ['gif', 'mp4', 'webm', 'mov', 'avi', 'mkv'],
+  VALID_OUTPUT: ['gif', 'mp4', 'webm', 'mov', 'avi', 'mkv', 'mp3'],
 };

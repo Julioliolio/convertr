@@ -13,7 +13,7 @@ const {
 
 const {
   FFMPEG_PATH,
-  getDuration, getVideoMeta, buildGifFilters, runFFmpeg,
+  getDuration, getVideoCodec, getVideoMeta, buildGifFilters, runFFmpeg,
   getCodecArgs, getFastCutArgs, buildProxyArgs, isBrowserPlayable,
   serveJobFile,
 } = require('./server-utils');
@@ -532,8 +532,11 @@ function runConversion(jobId, inputPath, inputSize, outputPath, outputFormat, op
           // -ss/-to BEFORE -i enables fast keyframe seek; combined with
           // `-c copy` this re-muxes rather than re-encodes. Output is the
           // original quality; cut points snap to the nearest keyframe ≤ ss.
+          // Probe the source codec so we can rewrite HEVC's tag to hvc1 during
+          // the remux — without this Premiere rejects trimmed HEVC clips.
+          const sourceCodec = await getVideoCodec(inputPath);
           await runFFmpeg([
-            ...trimArgs, '-i', inputPath, ...getFastCutArgs(audio), outputPath,
+            ...trimArgs, '-i', inputPath, ...getFastCutArgs(audio, sourceCodec, outputFormat), outputPath,
           ], (frame) => {
             const pct = 35 + Math.min(63, Math.round((frame / estFrames) * 63));
             broadcast(jobId, { status: 'encoding', progress: pct, message: `Copying frame ${frame}…` });

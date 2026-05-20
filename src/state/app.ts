@@ -1,6 +1,6 @@
 import { createStore } from 'solid-js/store';
 
-export type OutputFormat = 'gif' | 'avi' | 'mp4' | 'mov' | 'webm' | 'mkv';
+export type OutputFormat = 'gif' | 'avi' | 'mp4' | 'mov' | 'webm' | 'mkv' | 'mp3';
 
 export interface AppState {
   outputFormat: OutputFormat;
