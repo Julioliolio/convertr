@@ -192,6 +192,46 @@ function isNewerVersion(remote, local) {
   return false;
 }
 
+// Pick the release asset that matches the current platform. Linux uses AppImage
+// (no real installer flow — we just reveal the file). Returns null if the
+// release doesn't have a matching artifact.
+function pickPlatformAsset(release, version) {
+  const name =
+    process.platform === 'darwin' ? `Convertr-${version}-mac.dmg`
+  : process.platform === 'win32'  ? `Convertr-${version}-windows.exe`
+  : process.platform === 'linux'  ? `Convertr-${version}-linux.AppImage`
+  : null;
+  if (!name) return null;
+  return (release.assets || []).find((a) => a.name === name) || null;
+}
+
+// Download an asset to the OS Downloads folder using the main window's session
+// so dock / taskbar progress works automatically. Resolves with the saved path.
+function downloadAsset(asset) {
+  return new Promise((resolve, reject) => {
+    const win = mainWindow;
+    if (!win) return reject(new Error('No window to host the download'));
+    const ses = win.webContents.session;
+    const savePath = path.join(app.getPath('downloads'), asset.name);
+    const onWillDownload = (_event, item) => {
+      item.setSavePath(savePath);
+      item.on('updated', (_e, state) => {
+        if (state !== 'progressing') return;
+        const total = item.getTotalBytes();
+        const got = item.getReceivedBytes();
+        win.setProgressBar(total > 0 ? got / total : 2); // 2 = indeterminate
+      });
+      item.once('done', (_e, state) => {
+        win.setProgressBar(-1);
+        if (state === 'completed') resolve(savePath);
+        else reject(new Error(`Download ${state}`));
+      });
+    };
+    ses.once('will-download', onWillDownload);
+    ses.downloadURL(asset.browser_download_url);
+  });
+}
+
 async function checkForUpdate() {
   if (!app.isPackaged) return;
   try {
@@ -204,17 +244,92 @@ async function checkForUpdate() {
     const local = app.getVersion();
     if (!remote || !isNewerVersion(remote, local)) return;
 
-    const { response } = await dialog.showMessageBox({
+    const asset = pickPlatformAsset(data, remote);
+    const releaseUrl = data.html_url || 'https://github.com/Julioliolio/convertr/releases/latest';
+
+    // No matching artifact for this platform → fall back to opening the page.
+    if (!asset) {
+      const { response } = await dialog.showMessageBox({
+        type: 'info',
+        title: 'Update available',
+        message: `Convertr ${remote} is available`,
+        detail: `You're running ${local}. Open the download page?`,
+        buttons: ['Open Page', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (response === 0) shell.openExternal(releaseUrl);
+      return;
+    }
+
+    const { response: confirm } = await dialog.showMessageBox({
       type: 'info',
       title: 'Update available',
       message: `Convertr ${remote} is available`,
-      detail: `You're running ${local}. Open the download page?`,
+      detail: `You're running ${local}. Download and open the installer now?`,
       buttons: ['Download', 'Later'],
       defaultId: 0,
       cancelId: 1,
     });
-    if (response === 0) {
-      shell.openExternal(data.html_url || 'https://github.com/Julioliolio/convertr/releases/latest');
+    if (confirm !== 0) return;
+
+    let savedPath;
+    try {
+      savedPath = await downloadAsset(asset);
+    } catch (err) {
+      console.error('[Convertr] update download failed:', err.message);
+      const { response: r } = await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Download failed',
+        message: 'Could not download the update.',
+        detail: `${err.message}\n\nOpen the release page instead?`,
+        buttons: ['Open Page', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (r === 0) shell.openExternal(releaseUrl);
+      return;
+    }
+
+    // Linux: no installer; just point the user at the new AppImage. The user
+    // replaces their old AppImage manually — there's no equivalent of "mount
+    // the DMG and drag over Applications" we can automate.
+    if (process.platform === 'linux') {
+      const { response: r } = await dialog.showMessageBox({
+        type: 'info',
+        title: 'Update downloaded',
+        message: `Convertr ${remote} is in your Downloads folder`,
+        detail: 'Replace your existing AppImage with the new one to update.',
+        buttons: ['Show in Folder', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (r === 0) shell.showItemInFolder(savedPath);
+      return;
+    }
+
+    // macOS / Windows: open the installer and quit so the user can replace the
+    // running app. Finder / the installer would refuse to overwrite a running
+    // app, so quitting first is the right thing to do — the user already opted
+    // into "update now" by getting this far.
+    const installLabel = process.platform === 'darwin' ? 'Open Installer' : 'Run Installer';
+    const installDetail = process.platform === 'darwin'
+      ? 'Convertr will quit and the installer DMG will open. Drag the new Convertr onto Applications to finish.'
+      : 'Convertr will quit and the installer will run.';
+    const { response: r } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Update downloaded',
+      message: `Convertr ${remote} is ready to install`,
+      detail: installDetail,
+      buttons: [installLabel, 'Show in Folder', 'Later'],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    if (r === 0) {
+      await shell.openPath(savedPath);
+      app.quit();
+    } else if (r === 1) {
+      shell.showItemInFolder(savedPath);
     }
   } catch (err) {
     console.error('[Convertr] update check failed:', err.message);
