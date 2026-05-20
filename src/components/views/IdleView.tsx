@@ -64,7 +64,10 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   // ── Static config ────────────────────────────────────────────────────────────
   const p = {
     phases: { splash_ms: 700, contract_ms: 100 },
-    guides: { dur: 0.3, x1: 0.8, y1: 0.0, x2: 0.2, y2: 1.0 },
+    // Match EditorView's bbox easing — pronounced undershoot/overshoot so the
+    // idle → loading morph (and the idle aspect-ratio cycle) feel like the
+    // rest of the app instead of a flat ease-in-out.
+    guides: { dur: 0.3, x1: 1.0, y1: -0.35, x2: 0.22, y2: 1.15 },
     logo:   { dur: 0.3 },
     text:   { line1_dur: 0.2, line2_dur: 0.2, line2_delay: 0.1, x1: 0.0, y1: 1.0, x2: 0.28, y2: 1.0 },
     helper_fade_dur: 0.1,
@@ -105,7 +108,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   // until the real job reports done, then closes HOLD_AT → 100 over
   // FINISH_MS before firing the transition to EditorView. No gate resets,
   // no smoothing jumps — single continuous animation.
-  const BAR_FADE_MS = 1050; // = (STAGGER_P1 + STAGGER_DELAY + STAGGER_P2) * 1000
+  const BAR_FADE_MS = 700; // = (STAGGER_P1 + STAGGER_DELAY + STAGGER_P2) * 1000
   const ANIMATE_MS = 3000;
   const FINISH_MS  = 350;
   const HOLD_AT    = 92;
@@ -309,13 +312,14 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   let skipTransition = _hl();
 
   // Apply guide positions whenever phase or dial values change.
-  // Both axes move simultaneously, matching the full cross-spin duration so
-  // the bbox shape transition lands together with the cross resolving back
-  // to 360°. Skipped on the initial remount after a video cancel so the
-  // lines don't flicker from SPLASH → idle.
-  const STAGGER_P1 = 0.70;  // Y-axis duration (matches full cross spin)
-  const STAGGER_P2 = 0.70;  // X-axis duration (matches full cross spin)
-  const STAGGER_DELAY = 0;  // no leading delay — both start with the spin
+  // Both axes move simultaneously with a snappy 350ms duration — matches the
+  // EditorView bbox and the Timeline/TrimRow transitions, so the idle → loading
+  // morph feels like the rest of the app. The cross spin continues for 700ms
+  // and is allowed to outlast the bbox settle. Skipped on the initial remount
+  // after a video cancel so the lines don't flicker from SPLASH → idle.
+  const STAGGER_P1 = 0.35;  // Y-axis duration
+  const STAGGER_P2 = 0.35;  // X-axis duration
+  const STAGGER_DELAY = 0;  // no leading delay — both start together
   createEffect(() => {
     const l = gl(), r = gr(), t = gt(), b = gb();
     const { vw, vh } = vp();
