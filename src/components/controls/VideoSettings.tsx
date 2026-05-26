@@ -287,7 +287,7 @@ const VideoSettings: Component<{
             <Toggle
               label="Fast-cut"
               hint={fastCutEligible()
-                ? 'Stream-copy: near-instant, no re-encode. Cut snaps to nearest keyframe before start.'
+                ? 'Stream-copy: near-instant, no re-encode. Cut points snap to the nearest keyframe before start — output may include extra leading frames.'
                 : `Fast-cut only works when input and output formats match (input: ${appState.inputFormat ?? '?'}).`}
               on={() => appState.fastCut && fastCutEligible()}
               onToggle={(on) => setAppState('fastCut', on)}

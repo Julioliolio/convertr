@@ -51,7 +51,10 @@ const [appState, setAppState] = createStore<AppState>({
   vidWidth: 0,    // 0 = original
   crf: 23,
   audio: true,
-  fastCut: true,  // on by default for same-format trim; no effect otherwise
+  fastCut: false, // off by default: stream-copy snaps cut points to the nearest
+                  // preceding keyframe, which silently extends the trim range —
+                  // for the "just crop a video" case the user expects an exact
+                  // cut. Toggle on for speed when an inexact cut is acceptable.
 });
 
 export { appState, setAppState };
