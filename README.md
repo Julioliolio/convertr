@@ -1,10 +1,4 @@
-
-<video src="'/Users/julioliolio/Desktop/videos converter/converter full (small).mp4'" width="320" height="240" controls></video>
-
-or
-
-<iframe width="560" height="315" src="https://www.youtube.com/embed/video-id" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-
+https://github.com/user-attachments/assets/ebc3f3be-08d0-4336-a07a-304caf0d1d61
 # Convertr
 
 A desktop app that converts video files between formats — GIF, MP4, WebM, MOV, AVI, MKV — and can download & convert videos directly from URLs (YouTube, Twitter/X, etc.).
