@@ -1,7 +1,9 @@
 https://github.com/user-attachments/assets/ebc3f3be-08d0-4336-a07a-304caf0d1d61
 # Convertr
 
-A desktop app that converts video files between formats — GIF, MP4, WebM, MOV, AVI, MKV — and can download & convert videos directly from URLs (YouTube, Twitter/X, etc.).
+A desktop app that converts video files between formats — GIF, MP4, WebM, MOV, AVI, MKV, MP3 — and can download & convert videos directly from URLs (YouTube, Twitter/X, etc.).
+
+**[Try it in your browser →](https://julioliolio.github.io/convertr/app/)** No install; files are converted on your device and never uploaded. (URL downloads need the desktop app.)
 
 ---
 
@@ -57,6 +59,19 @@ The app will show a clear error message if a URL fetch is attempted without yt-d
 
 ---
 
+## Online version
+
+[julioliolio.github.io/convertr/app](https://julioliolio.github.io/convertr/app/) runs the same interface with [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm): FFmpeg compiled to WebAssembly, running in your browser. Differences from the desktop app:
+
+- No URL downloads (yt-dlp can't run in a browser)
+- Slower, since WebAssembly FFmpeg is single-threaded; best for short clips
+- WebM output uses VP8 (VP9 crashes the WebAssembly build), and there's no H.265 option
+- The first conversion downloads the ~32 MB FFmpeg core
+
+It's built from the same source with `npm run build:web` and deployed by `.github/workflows/pages.yml` on every push to `main`.
+
+---
+
 ## What It Does
 
 - **Converts video files** between formats: GIF, MP4, WebM, MOV, AVI, MKV
@@ -79,6 +94,7 @@ The app will show a clear error message if a URL fetch is attempted without yt-d
 | Desktop wrapper | Electron |
 | Media processing | FFmpeg + FFprobe (bundled) |
 | URL downloads | yt-dlp |
+| Online version | ffmpeg.wasm |
 | Auto-updates | electron-updater |
 | Build | Electron Builder |
 
@@ -102,6 +118,9 @@ npm run dev
 
 # 3c. Launch as an Electron desktop app
 npm run electron-dev
+
+# 3d. Run the in-browser (GitHub Pages) version
+npm run dev:web
 ```
 
 Node.js v18+ is required. FFmpeg is bundled — no system install needed.

@@ -1,3 +1,6 @@
+// Mirrors MAX_FILE_SIZE in server-config.js.
+export const MAX_FILE_BYTES = 500 * 1024 * 1024;
+
 export interface ServerMeta {
   duration: number;
   width: number;
@@ -14,11 +17,13 @@ export interface UploadResult {
 }
 
 // Upload with real-time byte progress. `onProgress` receives percentages in
-// [0, 100]. Uses XHR because fetch() has no upload-progress hook.
+// [0, 100]. Uses XHR because fetch() has no upload-progress hook. The web
+// build opens the file in-browser instead (nothing is uploaded).
 export function uploadFileWithProgress(
   file: File,
   onProgress?: (pct: number) => void,
 ): Promise<UploadResult | null> {
+  if (__WEB__) return import('../web/engine').then(e => e.webUpload(file, onProgress));
   return new Promise((resolve) => {
     const form = new FormData();
     form.append('video', file);
@@ -51,6 +56,7 @@ export function uploadFileWithProgress(
  * Returns the preview URL when ready, or null on timeout / no-proxy-needed.
  */
 export async function waitForPreview(jobId: string, timeoutMs = 60_000): Promise<string | null> {
+  if (__WEB__) return (await import('../web/engine')).webWaitForPreview(jobId);
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {

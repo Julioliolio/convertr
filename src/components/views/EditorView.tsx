@@ -1,7 +1,7 @@
 import { Component, createEffect, createMemo, createSignal, onCleanup, onMount, Show, untrack } from 'solid-js';
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
-import { startConversion } from '../../api/convert';
+import { startConversion, downloadUrl } from '../../api/convert';
 import { listenProgress, stopProgress } from '../../api/progress';
 import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
 import { fetchEstimate, cancelEstimate } from '../../api/estimate';
@@ -1467,7 +1467,7 @@ const EditorView: Component<{ video: VideoInfo; onBack: () => void }> = (props) 
               <Cross />
               <a
                 class="download-chip"
-                href={`/download/${appState.currentJobId}`}
+                href={downloadUrl(appState.currentJobId, resultUrl())}
                 download={resultFilename() || 'output'}
                 title="Download"
                 style={{

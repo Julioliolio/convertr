@@ -2,7 +2,7 @@ import { Component, Show, createEffect, createMemo, createSignal, onCleanup, onM
 import type { VideoInfo } from '../../App';
 import { calculateBBoxTargets } from '../../engine/bbox-calc';
 import { setAppState } from '../../state/app';
-import { uploadFileWithProgress, waitForPreview } from '../../api/upload';
+import { MAX_FILE_BYTES, uploadFileWithProgress, waitForPreview } from '../../api/upload';
 import { pct, scrambleText } from '../../shared/utils';
 import CarrierBricks from '../loading/CarrierBricks';
 
@@ -382,7 +382,8 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
   // shared scrambleText util (same defaults as EditorView's chips). The
   // monospace font keeps chip width stable while characters resolve.
   const HINT_LINE_1 = 'DROP A FILE OR';
-  const HINT_LINE_2 = 'PASTE A URL';
+  // The web build can't fetch URLs (no yt-dlp in a browser).
+  const HINT_LINE_2 = __WEB__ ? 'CLICK TO BROWSE' : 'PASTE A URL';
   const [hintLine1, setHintLine1] = createSignal(HINT_LINE_1);
   const [hintLine2, setHintLine2] = createSignal(HINT_LINE_2);
   let hintScrambleRaf = 0;
@@ -429,6 +430,11 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
       setTimeout(() => setFetchStatus(null), 3000);
       return;
     }
+    if (file.size > MAX_FILE_BYTES) {
+      setFetchStatus('File too large — 500 MB max');
+      setTimeout(() => setFetchStatus(null), 3000);
+      return;
+    }
     const objectUrl = URL.createObjectURL(file);
 
     // Probe dimensions client-side in parallel so the transition to EditorView
@@ -469,7 +475,7 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     ]).then(([dims, result]) => {
       if (!result) {
         stopPacedLoading();
-        setFetchStatus('Upload failed');
+        setFetchStatus(__WEB__ ? 'Could not open file' : 'Upload failed');
         setTimeout(() => setFetchStatus(null), 3000);
         setPhase('idle');
         URL.revokeObjectURL(objectUrl);
@@ -520,6 +526,11 @@ const IdleView: Component<{ onVideoSelected: (info: VideoInfo) => void }> = (pro
     const text = e.clipboardData?.getData('text');
     if (!text?.startsWith('http://') && !text?.startsWith('https://')) return;
     if (isLoading()) return; // another job already in flight
+    if (__WEB__) {
+      setFetchStatus('URL downloads need the desktop app');
+      setTimeout(() => setFetchStatus(null), 3000);
+      return;
+    }
 
     // Start the bar — bbox morphs into the loading bar shape.
     setPhase('loading');

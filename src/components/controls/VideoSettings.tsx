@@ -177,7 +177,9 @@ const VideoSettings: Component<{
 
   const isGif = () => appState.outputFormat === 'gif';
   const isMp3 = () => appState.outputFormat === 'mp3';
-  const supportsH265 = () => H265_CAPABLE.has(appState.outputFormat);
+  // x265 is impractically slow in single-threaded ffmpeg.wasm, so the web
+  // build only offers H.264.
+  const supportsH265 = () => !__WEB__ && H265_CAPABLE.has(appState.outputFormat);
   // Fast-cut is only meaningful when we can stream-copy — same container in/out
   // and non-GIF. We still render the toggle disabled for context in other
   // cases so users understand why it's there.

@@ -2,3 +2,4 @@ node_modules/
 dist/
 .claude/
 public-built/
+dist-web/

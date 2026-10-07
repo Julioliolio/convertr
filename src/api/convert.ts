@@ -35,6 +35,14 @@ export async function startConversion(trimStart?: number, trimEnd?: number): Pro
     trimEnd,
   };
 
+  if (__WEB__) {
+    // The web build always opens the file first, so there's always a job.
+    if (!uploadJobId) return null;
+    const jobId = (await import('../web/engine')).webStartConversion(uploadJobId, commonBody);
+    if (jobId) setAppState('currentJobId', jobId);
+    return jobId;
+  }
+
   try {
     let res: Response;
 
@@ -81,4 +89,10 @@ export async function startConversion(trimStart?: number, trimEnd?: number): Pro
     console.error('Conversion start failed:', err);
     return null;
   }
+}
+
+/** Href for the result's download link. The server sets Content-Disposition
+ *  on /download; in the web build the result is already a local blob URL. */
+export function downloadUrl(jobId: string | null, resultUrl: string | null): string {
+  return __WEB__ ? (resultUrl ?? '') : `/download/${jobId}`;
 }

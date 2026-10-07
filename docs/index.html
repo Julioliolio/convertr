@@ -83,6 +83,29 @@
     }
 
     .loading { font-size: 11px; opacity: 0.5; }
+
+    .try {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 28px;
+      padding: 14px 18px;
+      border: 1px dashed var(--accent);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 500;
+      text-decoration: none;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .try:hover { background: var(--accent); color: var(--bg); border-style: solid; }
+
+    .try-note {
+      font-size: 10px;
+      opacity: 0.6;
+      margin-top: 8px;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
@@ -92,6 +115,11 @@
     <div class="buttons" id="buttons">
       <span class="loading">fetching latest release...</span>
     </div>
+    <a class="try" href="app/">
+      <span>Try it in your browser</span>
+      <span>&rarr;</span>
+    </a>
+    <p class="try-note">No install. Files are converted on your device and never uploaded. URL downloads (YouTube etc.) need the desktop app.</p>
     <p class="version" id="version"></p>
   </div>
 

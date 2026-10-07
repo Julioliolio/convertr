@@ -15,6 +15,9 @@ export interface EstimateParams {
 let controller: AbortController | null = null;
 
 export async function fetchEstimate(params: EstimateParams): Promise<number | null> {
+  // Sample encodes would hog the single wasm ffmpeg; null makes the editor
+  // fall back to its analytical estimate.
+  if (__WEB__) return null;
   if (controller) controller.abort();
   controller = new AbortController();
   try {
