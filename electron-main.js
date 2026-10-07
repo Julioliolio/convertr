@@ -337,6 +337,8 @@ async function checkForUpdate() {
 }
 
 app.whenReady().then(() => {
+  // Managed yt-dlp lives here (see server-ytdlp.js).
+  process.env.CONVERTR_DATA_DIR = app.getPath('userData');
   const { startServer } = require('./server');
 
   startServer(0).then((port) => {

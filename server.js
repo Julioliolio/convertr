@@ -18,6 +18,8 @@ const {
   serveJobFile,
 } = require('./server-utils');
 
+const { resolveYtdlp, updateYtdlp } = require('./server-ytdlp');
+
 const app = express();
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -89,12 +91,18 @@ function broadcast(jobId, data) {
   }
 }
 
-// Augmented PATH so yt-dlp is found inside a packaged Electron app even when
-// the system PATH doesn't include Homebrew (/opt/homebrew/bin on Apple Silicon,
-// /usr/local/bin on Intel).
+// Augmented PATH so a system yt-dlp (fallback only — see server-ytdlp.js) is
+// found inside a packaged macOS app even when the system PATH doesn't include
+// Homebrew (/opt/homebrew/bin on Apple Silicon, /usr/local/bin on Intel).
+// ELECTRON_RUN_AS_NODE lets yt-dlp use our own executable as its Node runtime
+// for YouTube's JS challenges (see --js-runtimes below); it's a no-op when
+// we're already running under plain node.
 const YTDLP_ENV = {
   ...process.env,
-  PATH: ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.PATH || ''].join(':'),
+  ELECTRON_RUN_AS_NODE: '1',
+  PATH: process.platform === 'win32'
+    ? process.env.PATH
+    : ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.PATH || ''].join(path.delimiter),
 };
 
 function cleanup(jobId, delay = 0) {
@@ -164,95 +172,118 @@ app.post('/fetch', async (req, res) => {
   res.json({ jobId });
 
   const ytdlpMissingHint = process.platform === 'win32'
-    ? 'yt-dlp is not installed. Run: winget install yt-dlp.yt-dlp'
-    : 'yt-dlp is not installed. Run: brew install yt-dlp';
+    ? 'Could not set up yt-dlp automatically. Check your connection, or run: winget install yt-dlp.yt-dlp'
+    : 'Could not set up yt-dlp automatically. Check your connection, or run: brew install yt-dlp';
 
-  let ytdlp;
-  try {
-    ytdlp = spawn('yt-dlp', [
+  const runYtdlp = ({ bin, managed }) => new Promise((resolve) => {
+    const args = [
       '--no-playlist', '--max-filesize', '500m',
       '-f', 'bv*+ba/b', '--merge-output-format', 'mp4',
-      '-o', outputTemplate, '--progress', '--newline', url,
-    ], { env: YTDLP_ENV });
-  } catch (err) {
+      // Merge with our bundled ffmpeg so users don't need a system install.
+      '--ffmpeg-location', FFMPEG_PATH,
+      '-o', outputTemplate, '--progress', '--newline',
+    ];
+    // Only current builds know --js-runtimes; an old system yt-dlp would
+    // reject the whole command over it.
+    if (managed) args.push('--js-runtimes', `node:${process.execPath}`);
+    args.push(url);
+
+    let ytdlp;
+    try {
+      ytdlp = spawn(bin, args, { env: YTDLP_ENV });
+    } catch {
+      return resolve({ missing: true });
+    }
+
+    let stderr = '';
+    let lastFile = null;
+    let settled = false;
+    const done = (result) => { if (!settled) { settled = true; resolve(result); } };
+
+    ytdlp.on('error', () => done({ missing: true }));
+
+    ytdlp.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      const m = text.match(/\[download\]\s+([\d.]+)%/);
+      if (m) {
+        const pct = parseFloat(m[1]);
+        const job = jobs.get(jobId);
+        if (job) { job.progress = pct; job.message = `Downloading: ${pct.toFixed(1)}%`; }
+        broadcast(jobId, { status: 'downloading', progress: Math.round(pct * 0.3), message: `Downloading: ${pct.toFixed(1)}%` });
+      }
+      const dest = text.match(/\[(?:Merger|download)\] (?:Merging formats into "|Destination: )([^"\n]+)/);
+      if (dest) lastFile = dest[1].trim();
+    });
+
+    ytdlp.stderr.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-STDERR_BUFFER);
+    });
+
+    ytdlp.on('close', (code) => done({ code, stderr, lastFile }));
+  });
+
+  let ytdlpBin = await resolveYtdlp();
+  let result = await runYtdlp(ytdlpBin);
+  // Sites (YouTube especially) break older yt-dlp builds without warning. If
+  // the managed copy failed and GitHub has a newer one, install it and retry
+  // once before reporting the error.
+  if (result.code !== 0 && ytdlpBin.managed && await updateYtdlp({ force: true })) {
+    ytdlpBin = await resolveYtdlp();
+    result = await runYtdlp(ytdlpBin);
+  }
+
+  const { missing, code, stderr, lastFile } = result;
+  if (missing) {
     broadcast(jobId, { error: true, message: ytdlpMissingHint });
     cleanup(jobId, ERROR_CLEANUP_MS);
     return;
   }
-
-  ytdlp.on('error', () => {
-    broadcast(jobId, { error: true, message: ytdlpMissingHint });
+  if (code !== 0) {
+    broadcast(jobId, { error: true, message: `Download failed: ${stderr.slice(-300) || 'unknown error'}` });
     cleanup(jobId, ERROR_CLEANUP_MS);
+    return;
+  }
+
+  let inputPath = lastFile;
+  if (!inputPath || !fs.existsSync(inputPath)) {
+    const files = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(`${jobId}-input`));
+    if (files.length > 0) inputPath = path.join(TEMP_DIR, files[0]);
+  }
+
+  if (!inputPath || !fs.existsSync(inputPath)) {
+    broadcast(jobId, { error: true, message: 'Download completed but file not found' });
+    cleanup(jobId, ERROR_CLEANUP_MS);
+    return;
+  }
+
+  const inputSize = fs.statSync(inputPath).size;
+  const meta = await getVideoMeta(inputPath);
+  const inputExt = path.extname(inputPath).replace(/^\./, '').toLowerCase();
+  const job = jobs.get(jobId);
+  if (job) {
+    job.status = 'downloaded';
+    job.inputPath = inputPath;
+    job.inputSize = inputSize;
+    job.meta = meta;
+    job.inputFormat = inputExt;
+    job.uploadTimer = setTimeout(() => cleanup(jobId), UPLOAD_CLEANUP_MS);
+  }
+
+  // yt-dlp forces mp4 output in this path (see --merge-output-format mp4),
+  // so the downloaded file is always browser-playable. Preview proxy is
+  // still safe to skip here — but run it if format drifts later.
+  ensurePreviewProxy(jobId, inputPath).then(previewPath => {
+    if (!previewPath) return;
+    const j = jobs.get(jobId);
+    if (j) j.previewPath = previewPath;
+    else try { fs.unlinkSync(previewPath); } catch {} // job cleaned up mid-proxy — drop the orphan file
   });
 
-  let stderr = '';
-  let lastFile = null;
-
-  ytdlp.stdout.on('data', (chunk) => {
-    const text = chunk.toString();
-    const m = text.match(/\[download\]\s+([\d.]+)%/);
-    if (m) {
-      const pct = parseFloat(m[1]);
-      const job = jobs.get(jobId);
-      if (job) { job.progress = pct; job.message = `Downloading: ${pct.toFixed(1)}%`; }
-      broadcast(jobId, { status: 'downloading', progress: Math.round(pct * 0.3), message: `Downloading: ${pct.toFixed(1)}%` });
-    }
-    const dest = text.match(/\[(?:Merger|download)\] (?:Merging formats into "|Destination: )([^"\n]+)/);
-    if (dest) lastFile = dest[1].trim();
-  });
-
-  ytdlp.stderr.on('data', (chunk) => {
-    stderr = (stderr + chunk.toString()).slice(-STDERR_BUFFER);
-  });
-
-  ytdlp.on('close', async (code) => {
-    if (code !== 0) {
-      broadcast(jobId, { error: true, message: `Download failed: ${stderr.slice(-300) || 'unknown error'}` });
-      cleanup(jobId, ERROR_CLEANUP_MS);
-      return;
-    }
-
-    let inputPath = lastFile;
-    if (!inputPath || !fs.existsSync(inputPath)) {
-      const files = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(`${jobId}-input`));
-      if (files.length > 0) inputPath = path.join(TEMP_DIR, files[0]);
-    }
-
-    if (!inputPath || !fs.existsSync(inputPath)) {
-      broadcast(jobId, { error: true, message: 'Download completed but file not found' });
-      cleanup(jobId, ERROR_CLEANUP_MS);
-      return;
-    }
-
-    const inputSize = fs.statSync(inputPath).size;
-    const meta = await getVideoMeta(inputPath);
-    const inputExt = path.extname(inputPath).replace(/^\./, '').toLowerCase();
-    const job = jobs.get(jobId);
-    if (job) {
-      job.status = 'downloaded';
-      job.inputPath = inputPath;
-      job.inputSize = inputSize;
-      job.meta = meta;
-      job.inputFormat = inputExt;
-      job.uploadTimer = setTimeout(() => cleanup(jobId), UPLOAD_CLEANUP_MS);
-    }
-
-    // yt-dlp forces mp4 output in this path (see --merge-output-format mp4),
-    // so the downloaded file is always browser-playable. Preview proxy is
-    // still safe to skip here — but run it if format drifts later.
-    ensurePreviewProxy(jobId, inputPath).then(previewPath => {
-      if (!previewPath) return;
-      const j = jobs.get(jobId);
-      if (j) j.previewPath = previewPath;
-      else try { fs.unlinkSync(previewPath); } catch {} // job cleaned up mid-proxy — drop the orphan file
-    });
-
-    broadcast(jobId, {
-      status: 'downloaded', progress: 30,
-      message: 'Download complete. Ready to convert.',
-      inputPath, inputSize, fileName: path.basename(inputPath), meta,
-      inputFormat: inputExt, needsProxy: !isBrowserPlayable(inputExt),
-    });
+  broadcast(jobId, {
+    status: 'downloaded', progress: 30,
+    message: 'Download complete. Ready to convert.',
+    inputPath, inputSize, fileName: path.basename(inputPath), meta,
+    inputFormat: inputExt, needsProxy: !isBrowserPlayable(inputExt),
   });
 });
 
@@ -652,6 +683,9 @@ function startServer(port = PORT) {
       const actualPort = server.address().port;
       console.log(`\n  Converter running at http://localhost:${actualPort}\n`);
       resolve(actualPort);
+      // Install / refresh yt-dlp in the background so the first URL paste
+      // doesn't wait on it.
+      updateYtdlp();
     });
   });
 }
