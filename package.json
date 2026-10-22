@@ -40,6 +40,7 @@
       "server.js",
       "server-utils.js",
       "server-config.js",
+      "server-ytdlp.js",
       "public-built/**/*"
     ],
     "asarUnpack": [
